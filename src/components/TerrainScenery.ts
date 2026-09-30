@@ -174,9 +174,10 @@ export function createTerrainMaterials(): TerrainMaterials {
         const [col, row] = SWATCH[terrain];
         const borderX = 5 / atlas.image.width,
           borderY = 5 / atlas.image.height;
-        // Keep each texture's original Source identity: the procedural fallback
-        // may already have uploaded it before the atlas finishes loading. Three.js
-        // tracks disposal against that Source, so replace only its image contents.
+        // WebGL2 texture storage has immutable dimensions. Release any uploaded
+        // 512px fallback before replacing it with the larger atlas, while retaining
+        // the same Texture and Source identities used by all terrain materials.
+        texture.dispose();
         texture.image = atlas.image;
         texture.repeat.set(1 / 3 - borderX * 2, 1 / 2 - borderY * 2);
         texture.offset.set(col / 3 + borderX, row / 2 + borderY);
