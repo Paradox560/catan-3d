@@ -1,5 +1,15 @@
 import { test, expect, type Page } from '@playwright/test';
 
+function watchErrors(page: Page) {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => {
+    // GPU texture errors do not throw JavaScript exceptions.
+    if (/GL_INVALID_(VALUE|OPERATION|ENUM)/.test(message.text())) errors.push(message.text());
+  });
+  return errors;
+}
+
 async function placePair(page: Page) {
   await expect(page.locator('.actions-panel h2')).toContainText(/Place your/);
   if (!(await page.getByRole('button', { name: 'Place', exact: true }).isVisible()))
@@ -15,8 +25,7 @@ async function placePair(page: Page) {
 }
 
 test('four local players complete founding, roll, save, and resume', async ({ page }) => {
-  const errors: string[] = [];
-  page.on('pageerror', (e) => errors.push(e.message));
+  const errors = watchErrors(page);
   await page.goto('/');
   await page.getByRole('tab', { name: 'Local play' }).click();
   await page.getByRole('button', { name: 'Set sail', exact: true }).click();
@@ -42,15 +51,18 @@ test('four local players complete founding, roll, save, and resume', async ({ pa
 
 for (const capacity of [4, 6])
   test(`${capacity} online players join a private room and complete setup`, async ({ browser }) => {
-    test.setTimeout(capacity === 6 ? 240_000 : 120_000);
+    // Each seat has a real WebGL board, including in software-rendered CI browsers.
+    test.setTimeout(capacity === 6 ? 360_000 : 180_000);
     const contexts = await Promise.all(
       Array.from({ length: capacity }, () =>
-        browser.newContext({ viewport: { width: 1280, height: 900 } }),
+        browser.newContext({
+          viewport: { width: 1280, height: 900 },
+          reducedMotion: 'reduce',
+        }),
       ),
     );
     const pages = await Promise.all(contexts.map((c) => c.newPage()));
-    const errors: string[] = [];
-    pages.forEach((page) => page.on('pageerror', (e) => errors.push(e.message)));
+    const errors = pages.map(watchErrors);
     try {
       const host = pages[0];
       await host.goto('/');
@@ -70,7 +82,10 @@ for (const capacity of [4, 6])
       }
       await expect(host.locator('.lobby-seat.filled')).toHaveCount(capacity);
       await host.getByRole('button', { name: 'Begin the adventure' }).click();
-      for (const p of pages) await expect(p.locator('.player-card')).toHaveCount(capacity);
+      // Starting replaces every lobby board simultaneously. Six software-rendered
+      // scenes on one CI machine need more time than a single player's device.
+      for (const p of pages)
+        await expect(p.locator('.player-card')).toHaveCount(capacity, { timeout: 45_000 });
       const order = [
         ...Array.from({ length: capacity }, (_, i) => i),
         ...Array.from({ length: capacity }, (_, i) => capacity - 1 - i),
@@ -103,13 +118,14 @@ for (const capacity of [4, 6])
         await next.getByRole('button', { name: 'Trade', exact: true }).click();
         await expect(next.getByRole('button', { name: 'Explorers', exact: true })).toBeDisabled();
       }
-      expect(errors).toEqual([]);
+      expect(errors.flat()).toEqual([]);
     } finally {
       for (const c of contexts) await c.close();
     }
   });
 
 test('mobile welcome, room selection and guide remain usable', async ({ page }) => {
+  const errors = watchErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   await page.getByRole('tab', { name: 'Local play' }).click();
@@ -121,4 +137,5 @@ test('mobile welcome, room selection and guide remain usable', async ({ page }) 
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.screenshot({ path: 'test-results/mobile-welcome.png', fullPage: true });
+  expect(errors).toEqual([]);
 });
