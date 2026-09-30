@@ -1,0 +1,26 @@
+# Demo configuration: no paid resources are requested by this Blueprint.
+# For durable rooms, select a paid web-service plan and uncomment disk below.
+# Review current plans and costs in your Render account before deploying.
+services:
+  - type: web
+    name: catan-3d
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: '3001'
+      - key: CATAN_DATA_DIR
+        value: /app/server/data
+    # Optional: add ALLOWED_ORIGINS in the dashboard if your reverse proxy
+    # changes the Host header. Set it to the exact public https:// origin.
+    #
+    # Paid persistence: change plan above to a paid plan, e.g. 0.5c-512mb,
+    # then uncomment this disk. Keep exactly one service instance.
+    # disk:
+    #   name: catan-room-data
+    #   mountPath: /app/server/data
+    #   sizeGB: 1
