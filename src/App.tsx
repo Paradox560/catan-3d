@@ -826,13 +826,9 @@ export default function App() {
                 <span className="tiny-line" /> YOUR NEXT ADVENTURE
               </span>
               <h1>
-                A world <br />
-                worth building<span>.</span>
+                A world worth building<span>.</span>
               </h1>
-              <p>
-                A little strategy. A little luck. <br />
-                An island full of possibilities.
-              </p>
+              <p>A little strategy. A little luck. An island full of possibilities.</p>
             </div>
             {screen === 'online' && room && !room.game ? (
               <div className="room-lobby">
