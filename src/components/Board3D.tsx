@@ -246,6 +246,7 @@ export default function Board3D({
   const sceneRef = useRef<{
     scene: THREE.Scene;
     renderer: THREE.WebGLRenderer;
+    invalidate: () => void;
     camera: THREE.PerspectiveCamera;
     controls: OrbitControls;
     pieces: THREE.Group;
@@ -299,7 +300,15 @@ export default function Board3D({
     const island = new THREE.Group();
     scene.add(island);
     const board = current.current.state.board;
-    const terrainSurfaces = createTerrainMaterials();
+    let dirty = true;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const invalidate = () => {
+      dirty = true;
+    };
+    const terrainSurfaces = createTerrainMaterials(() => {
+      renderer.domElement.dataset.atlasReady = 'true';
+      invalidate();
+    });
     const minX = Math.min(...board.hexes.map((h) => h.x)) - 1,
       maxX = Math.max(...board.hexes.map((h) => h.x)) + 1;
     const minZ = Math.min(...board.hexes.map((h) => h.z)) - 1,
@@ -309,7 +318,8 @@ export default function Board3D({
     const baseDistance = extent * 1.5;
     const camera = new THREE.PerspectiveCamera(37, 1, 0.1, 120);
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
+    controls.addEventListener('change', invalidate);
+    controls.enableDamping = !reducedMotion.matches;
     controls.dampingFactor = 0.075;
     controls.minPolarAngle = 0.23;
     controls.maxPolarAngle = Math.PI / 2.6;
@@ -467,6 +477,7 @@ export default function Board3D({
     sceneRef.current = {
       scene,
       renderer,
+      invalidate,
       camera,
       controls,
       pieces,
@@ -548,6 +559,7 @@ export default function Board3D({
       renderer.setSize(width, height);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
+      invalidate();
       if (firstSize) {
         if (camera.aspect < 1.2)
           camera.position
@@ -561,14 +573,23 @@ export default function Board3D({
     observer.observe(container);
     resize();
     const clock = new THREE.Clock();
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const motionPreferenceChanged = () => {
+      controls.enableDamping = !reducedMotion.matches;
+      invalidate();
+    };
+    reducedMotion.addEventListener('change', motionPreferenceChanged);
+    let renderedFrames = 0;
     let animation = 0;
     let lastFrame = -Infinity;
     const animate = (now = performance.now()) => {
       animation = requestAnimationFrame(animate);
-      // Multiplayer tabs need not redraw an unchanged, hidden board. A gentle
-      // 30 fps sea animation also leaves headroom for several open game clients.
-      if (document.hidden || now - lastFrame < 1000 / (reducedMotion.matches ? 12 : 30)) return;
+      if (document.hidden) return;
+      // Reduced motion is truly idle when nothing changes. Camera damping still
+      // advances, and its change event requests just the frames the orbit needs.
+      if (reducedMotion.matches) {
+        controls.update();
+        if (!dirty) return;
+      } else if (now - lastFrame < 1000 / 30) return;
       lastFrame = now;
       const elapsed = reducedMotion.matches ? 0 : clock.getElapsedTime();
       waterMaterial.uniforms.time.value = elapsed;
@@ -584,14 +605,18 @@ export default function Board3D({
         (mesh.material as THREE.MeshStandardMaterial).emissiveIntensity =
           0.4 + Math.sin(elapsed * 2.8 + i * 0.2) * 0.2;
       });
-      controls.update();
+      if (!reducedMotion.matches) controls.update();
       renderer.render(scene, camera);
+      dirty = false;
       renderer.domElement.dataset.drawCalls = String(renderer.info.render.calls);
+      renderer.domElement.dataset.renderedFrames = String(++renderedFrames);
     };
     animate();
     return () => {
       cancelAnimationFrame(animation);
       observer.disconnect();
+      reducedMotion.removeEventListener('change', motionPreferenceChanged);
+      controls.removeEventListener('change', invalidate);
       controls.dispose();
       renderer.domElement.removeEventListener('pointermove', move);
       renderer.domElement.removeEventListener('pointerdown', pointerDown);
@@ -792,6 +817,7 @@ export default function Board3D({
       ref.renderer.shadowMap.needsUpdate = true;
       lastShadowLayout.current = solidLayout;
     }
+    ref.invalidate();
   }, [solidLayout, placementLayout, topology]);
 
   useEffect(() => {
@@ -810,6 +836,7 @@ export default function Board3D({
         .multiplyScalar(Math.min(1.5, 1.2 / ref.camera.aspect))
         .add(ref.center);
     ref.controls.update();
+    ref.invalidate();
   }, [resetView]);
 
   return (

@@ -101,7 +101,7 @@ function noise(x: number, z: number, seed: number) {
 }
 
 /** Procedural fallback remains textured even when the optional art atlas is offline. */
-export function createTerrainMaterials(): TerrainMaterials {
+export function createTerrainMaterials(onReady?: () => void): TerrainMaterials {
   const materials = {} as TerrainMaterials;
   for (const [index, terrain] of (Object.keys(BASE) as Terrain[]).entries()) {
     const canvas = document.createElement('canvas');
@@ -184,6 +184,7 @@ export function createTerrainMaterials(): TerrainMaterials {
         texture.needsUpdate = true;
       }
       atlas.dispose();
+      onReady?.();
     },
     undefined,
     () => {

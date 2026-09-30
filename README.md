@@ -64,7 +64,7 @@ Local play saves automatically in browser storage and hides the next player's ha
 | Restore the view                       | Board reset-view button                             |
 | See rules                              | **Field guide**                                     |
 
-Dice sound is optional. The landscape, trees, fields, rocks, ports, ocean, and medieval building pieces are generated with Three.js. Sculpted ground uses original high-detail material textures; the interface uses parchment, oak, brass, and period-inspired serif typography. All game art is included locally. See [art materials and exact generation prompts](docs/ART.md). Reduced-motion preferences freeze ocean and boat motion; inactive tabs pause rendering.
+Dice sound is optional. The landscape, trees, fields, rocks, ports, ocean, and medieval building pieces are generated with Three.js. Sculpted ground uses original high-detail material textures; the interface uses parchment, oak, brass, and period-inspired serif typography. All game art is included locally. See [art materials and exact generation prompts](docs/ART.md). Reduced-motion preferences freeze ambient animation and redraw only when the board or camera changes; inactive tabs pause rendering.
 
 ## Rules implemented
 
