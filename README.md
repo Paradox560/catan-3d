@@ -4,7 +4,7 @@ A playable 3D island for a table of friends: orbit a miniature landscape, build 
 
 ![The 3D island and online lobby](docs/images/welcome.png)
 
-[View the in-game table](docs/images/gameplay.png).
+[View the in-game table](docs/images/gameplay.png) · [Mobile lobby](docs/images/mobile.png).
 
 | Mode          | Players | Terrain hexes | Resource supply     | Development deck |
 | ------------- | ------- | ------------- | ------------------- | ---------------- |
