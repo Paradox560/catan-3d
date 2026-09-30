@@ -3,6 +3,12 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { BuildKind, GameState, Terrain } from '../game/types';
+import {
+  createTerrainMaterials,
+  sculptedHex,
+  decorateRealTerrain,
+  medievalBuilding as building,
+} from './TerrainScenery';
 
 type Props = {
   state: GameState;
@@ -84,17 +90,23 @@ function labelSprite(text: string, sub = '', ink = '#273e39', disc = true) {
     ctx.shadowColor = 'rgba(20,34,23,.24)';
     ctx.shadowBlur = 10;
     ctx.shadowOffsetY = 5;
-    ctx.fillStyle = '#fff3d4';
+    ctx.fillStyle = '#d9c79e';
     ctx.beginPath();
     ctx.arc(128, 123, 111, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
     ctx.shadowOffsetY = 0;
-    ctx.strokeStyle = '#d5bd83';
+    ctx.strokeStyle = '#957846';
     ctx.lineWidth = 4;
     ctx.beginPath();
     ctx.arc(128, 123, 100, 0, Math.PI * 2);
     ctx.stroke();
+    for (let i = 0; i < 700; i++) {
+      const a = i * 2.399,
+        r = Math.sqrt(i / 700) * 97;
+      ctx.fillStyle = i % 2 ? '#705c3720' : '#ffedc220';
+      ctx.fillRect(128 + Math.cos(a) * r, 123 + Math.sin(a) * r, 2, 1);
+    }
     ctx.fillStyle = ink;
     ctx.font = 'bold 112px Georgia, serif';
     ctx.textAlign = 'center';
@@ -108,21 +120,21 @@ function labelSprite(text: string, sub = '', ink = '#273e39', disc = true) {
       ctx.fill();
     }
   } else {
-    ctx.fillStyle = 'rgba(14,50,54,.9)';
+    ctx.fillStyle = 'rgba(48,39,27,.94)';
     ctx.beginPath();
     ctx.roundRect(3, 3, 250, 90, 20);
     ctx.fill();
-    ctx.strokeStyle = '#8ac6bb';
+    ctx.strokeStyle = '#a68a58';
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.fillStyle = '#fff0cb';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = 'bold 33px Arial, sans-serif';
+    ctx.font = 'bold 33px Georgia, serif';
     ctx.fillText(text, 128, sub ? 32 : 48);
     if (sub) {
       ctx.font = '24px Arial, sans-serif';
-      ctx.fillStyle = '#bce0cf';
+      ctx.fillStyle = '#d4c19a';
       ctx.fillText(sub, 128, 67);
     }
   }
@@ -130,301 +142,19 @@ function labelSprite(text: string, sub = '', ink = '#273e39', disc = true) {
   texture.colorSpace = THREE.SRGBColorSpace;
   const m = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: !disc });
   const sprite = new THREE.Sprite(m);
-  sprite.scale.set(disc ? 0.52 : 0.86, disc ? 0.52 : 0.323, 1);
+  sprite.scale.set(disc ? 0.46 : 0.86, disc ? 0.46 : 0.323, 1);
   if (disc) sprite.renderOrder = 2;
   return sprite;
 }
 
-function hexTile(parent: THREE.Group, points: { x: number; z: number }[], terrain: Terrain) {
-  const rings = [
-    { r: 0.965, y: -0.24 },
-    { r: 0.993, y: -0.18 },
-    { r: 0.993, y: 0.045 },
-    { r: 0.948, y: 0.11 },
-  ];
-  const vertices: number[] = [];
-  const groups: { start: number; count: number; materialIndex: number }[] = [];
-  function triangle(a: number[], b: number[], c: number[]) {
-    vertices.push(...a, ...b, ...c);
-  }
-  const point = (i: number, ring: number) => [
-    points[i].x * rings[ring].r,
-    rings[ring].y,
-    points[i].z * rings[ring].r,
-  ];
-  for (let r = 0; r < 3; r++) {
-    const start = vertices.length / 3;
-    for (let i = 0; i < 6; i++) {
-      const j = (i + 1) % 6;
-      triangle(point(i, r), point(j, r), point(j, r + 1));
-      triangle(point(i, r), point(j, r + 1), point(i, r + 1));
-    }
-    groups.push({ start, count: vertices.length / 3 - start, materialIndex: r === 2 ? 1 : 0 });
-  }
-  const start = vertices.length / 3;
-  for (let i = 0; i < 6; i++) triangle([0, 0.11, 0], point(i, 3), point((i + 1) % 6, 3));
-  groups.push({ start, count: vertices.length / 3 - start, materialIndex: 2 });
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-  geometry.computeVertexNormals();
-  groups.forEach((g) => geometry.addGroup(g.start, g.count, g.materialIndex));
-  const mesh = new THREE.Mesh(geometry, [
-    material(TERRAIN[terrain].side, { side: THREE.DoubleSide }),
-    material(new THREE.Color(TERRAIN[terrain].top).multiplyScalar(1.08), {
-      side: THREE.DoubleSide,
-    }),
-    material(TERRAIN[terrain].top, { side: THREE.DoubleSide }),
-  ]);
-  mesh.receiveShadow = true;
-  mesh.castShadow = true;
-  parent.add(mesh);
-  return mesh;
-}
-
-function decorateTile(group: THREE.Group, terrain: Terrain, seed: number) {
-  const random = rng(seed * 127 + 9381);
-  const trunk = material('#825d3a'),
-    darkGreen = material('#286647'),
-    midGreen = material('#3d8053'),
-    lightGreen = material('#5a965b');
-  const cream = material('#f2e7cb'),
-    dark = material('#514c42'),
-    ochre = material('#b39243');
-  const stone = material('#738280'),
-    paleStone = material('#c3c9bf'),
-    snow = material('#eef0df');
-  const clay = material('#a34e3d'),
-    warmClay = material('#d68054');
-  function at(angle: number, radius: number) {
-    return { x: Math.cos(angle) * radius, z: Math.sin(angle) * radius };
-  }
-  if (terrain === 'wood') {
-    for (let i = 0; i < 8; i++) {
-      const p = at((i / 8) * Math.PI * 2 + random() * 0.2, 0.53 + random() * 0.12);
-      const height = 0.37 + random() * 0.26;
-      const radius = 0.12 + random() * 0.045;
-      solid(
-        group,
-        new THREE.CylinderGeometry(0.025, 0.033, height * 0.5, 5),
-        trunk,
-        p.x,
-        0.16 + height * 0.18,
-        p.z,
-      );
-      solid(
-        group,
-        new THREE.ConeGeometry(radius, height * 0.68, 6),
-        i % 2 ? midGreen : darkGreen,
-        p.x,
-        0.18 + height * 0.55,
-        p.z,
-      );
-      solid(
-        group,
-        new THREE.ConeGeometry(radius * 0.77, height * 0.61, 6),
-        i % 3 ? darkGreen : lightGreen,
-        p.x,
-        0.18 + height * 0.86,
-        p.z,
-      );
-    }
-    for (let i = 0; i < 5; i++) {
-      const p = at(random() * 6.28, 0.52 + random() * 0.15);
-      solid(group, new THREE.IcosahedronGeometry(0.048, 0), ochre, p.x, 0.125, p.z);
-    }
-  } else if (terrain === 'wheat') {
-    const stem = material('#ad8a35');
-    const heads = material('#f3d982');
-    const furrow = material('#bca154');
-    const field = new THREE.Group();
-    field.rotation.y = -0.35;
-    group.add(field);
-    for (const side of [-1, 1]) {
-      for (let row = 0; row < 4; row++) {
-        const z = side * (0.38 + row * 0.095);
-        box(field, furrow, 0, 0.118, z, 0.82 - row * 0.11, 0.014, 0.045);
-        for (let col = 0; col < 6 - (row > 1 ? 1 : 0); col++) {
-          const x = (col - (5 - (row > 1 ? 1 : 0)) / 2) * 0.118;
-          const h = 0.105 + random() * 0.045;
-          solid(field, new THREE.CylinderGeometry(0.007, 0.01, h, 3), stem, x, 0.13 + h / 2, z);
-          const head = solid(field, new THREE.SphereGeometry(0.026, 4, 3), heads, x, 0.14 + h, z);
-          head.scale.set(0.64, 1.65, 0.64);
-          head.rotation.z = -0.2;
-        }
-      }
-    }
-    const bale = solid(
-      group,
-      new THREE.CylinderGeometry(0.072, 0.072, 0.14, 9),
-      heads,
-      0.57,
-      0.19,
-      -0.03,
-    );
-    bale.rotation.z = Math.PI / 2;
-    const band = solid(
-      group,
-      new THREE.CylinderGeometry(0.073, 0.073, 0.023, 9),
-      ochre,
-      0.57,
-      0.19,
-      -0.03,
-    );
-    band.rotation.z = Math.PI / 2;
-  } else if (terrain === 'sheep') {
-    const grass = material('#679b52');
-    for (let i = 0; i < 4; i++) {
-      const p = at(i * 1.8 + 0.7, 0.49 + random() * 0.14);
-      const sheep = new THREE.Group();
-      sheep.position.set(p.x, 0.115, p.z);
-      sheep.rotation.y = random() * 6.28;
-      group.add(sheep);
-      const body = solid(sheep, new THREE.IcosahedronGeometry(0.105, 1), cream, 0, 0.105, 0);
-      body.scale.set(1.2, 0.82, 0.85);
-      solid(sheep, new THREE.IcosahedronGeometry(0.048, 0), dark, 0.103, 0.127, 0);
-      for (const x of [-0.056, 0.05])
-        for (const z of [-0.045, 0.045]) box(sheep, dark, x, 0.035, z, 0.021, 0.065, 0.021);
-      box(sheep, cream, 0.105, 0.16, 0, 0.04, 0.018, 0.12);
-    }
-    for (let i = 0; i < 8; i++) {
-      const p = at(i * 1.87, 0.6 + random() * 0.12);
-      solid(group, new THREE.ConeGeometry(0.034, 0.085, 3), grass, p.x, 0.15, p.z);
-    }
-    const fence = new THREE.Group();
-    fence.position.set(0, 0.12, 0.7);
-    group.add(fence);
-    for (const x of [-0.22, 0, 0.22]) box(fence, cream, x, 0.067, 0, 0.019, 0.135, 0.023);
-    for (const y of [0.047, 0.105]) box(fence, cream, 0, y, 0, 0.48, 0.019, 0.019);
-  } else if (terrain === 'brick') {
-    for (let i = 0; i < 5; i++) {
-      const p = at(i * 1.49 + 0.3, 0.55 + random() * 0.09);
-      const hill = solid(
-        group,
-        new THREE.IcosahedronGeometry(0.21 + random() * 0.07, 0),
-        i % 2 ? clay : warmClay,
-        p.x,
-        0.17,
-        p.z,
-      );
-      hill.scale.set(1, 0.85 + random() * 0.9, 0.82);
-      hill.rotation.y = i;
-    }
-    for (let row = 0; row < 3; row++)
-      for (let col = 0; col < 3 - row; col++)
-        box(
-          group,
-          row % 2 ? warmClay : clay,
-          -0.16 + col * 0.13 + row * 0.055,
-          0.15 + row * 0.061,
-          0.66,
-          0.12,
-          0.055,
-          0.09,
-        );
-  } else if (terrain === 'ore') {
-    for (let i = 0; i < 4; i++) {
-      const p = at(i * 1.72 + 0.5, 0.54 + random() * 0.055);
-      const h = 0.43 + random() * 0.41;
-      const radius = 0.23 + random() * 0.045;
-      const mountain = solid(
-        group,
-        new THREE.ConeGeometry(radius, h, 5),
-        i % 2 ? stone : paleStone,
-        p.x,
-        0.105 + h / 2,
-        p.z,
-      );
-      mountain.rotation.y = i * 0.6;
-      const peak = solid(
-        group,
-        new THREE.ConeGeometry(radius * 0.28, h * 0.28, 5),
-        snow,
-        p.x,
-        0.109 + h * 0.86,
-        p.z,
-      );
-      peak.rotation.y = mountain.rotation.y;
-      for (let j = 0; j < 2; j++)
-        solid(
-          group,
-          new THREE.DodecahedronGeometry(0.067 + random() * 0.025),
-          stone,
-          p.x + (random() - 0.5) * 0.36,
-          0.15,
-          p.z + (random() - 0.5) * 0.25,
-        );
-    }
-  } else {
-    const sand = material('#edce91'),
-      cactus = material('#618966');
-    for (let i = 0; i < 4; i++) {
-      const p = at(i * 1.7, 0.54);
-      const dune = solid(group, new THREE.SphereGeometry(0.23, 8, 5), sand, p.x, 0.1, p.z);
-      dune.scale.set(1.3, 0.38, 0.6);
-      dune.rotation.y = i;
-    }
-    const x = -0.53,
-      z = 0.22;
-    solid(group, new THREE.CapsuleGeometry(0.025, 0.17, 3, 5), cactus, x, 0.25, z);
-    box(group, cactus, x + 0.05, 0.24, z, 0.12, 0.033, 0.034);
-    solid(group, new THREE.CapsuleGeometry(0.018, 0.065, 3, 5), cactus, x + 0.105, 0.275, z);
-    solid(group, new THREE.CapsuleGeometry(0.018, 0.06, 3, 5), cactus, x - 0.045, 0.31, z);
-  }
-}
-
-function building(
-  parent: THREE.Group,
-  type: 'settlement' | 'city',
-  color: string,
-  x: number,
-  z: number,
-) {
-  const group = new THREE.Group();
-  group.position.set(x, 0.13, z);
-  group.rotation.y = Math.PI / 6;
-  parent.add(group);
-  const painted = material(color, { roughness: 0.55 }),
-    roof = material(new THREE.Color(color).multiplyScalar(0.66)),
-    light = material('#ffe9ad'),
-    base = material('#e9d7b4');
-  const scale = type === 'city' ? 1.15 : 1;
-  group.scale.setScalar(scale);
-  box(group, base, 0, 0.016, 0, type === 'city' ? 0.33 : 0.24, 0.045, 0.24);
-  box(group, painted, 0, 0.14, 0, 0.2, 0.23, 0.19);
-  const roofShape = new THREE.Shape();
-  roofShape.moveTo(-0.135, 0);
-  roofShape.lineTo(0.135, 0);
-  roofShape.lineTo(0, 0.13);
-  roofShape.closePath();
-  solid(
-    group,
-    new THREE.ExtrudeGeometry(roofShape, { depth: 0.24, bevelEnabled: false }),
-    roof,
-    0,
-    0.255,
-    -0.12,
-  );
-  box(group, light, 0, 0.095, 0.097, 0.048, 0.093, 0.006);
-  box(group, light, -0.102, 0.185, 0.035, 0.005, 0.038, 0.042);
-  if (type === 'city') {
-    box(group, painted, -0.125, 0.22, -0.015, 0.13, 0.39, 0.14);
-    solid(group, new THREE.ConeGeometry(0.11, 0.14, 4), roof, -0.125, 0.48, -0.015).rotation.y =
-      Math.PI / 4;
-    box(group, light, -0.125, 0.315, 0.057, 0.035, 0.055, 0.005);
-    box(group, painted, 0.115, 0.085, 0, 0.1, 0.12, 0.16);
-    box(group, roof, 0.115, 0.155, 0, 0.12, 0.032, 0.18);
-  }
-  return group;
-}
-
 function harbor(parent: THREE.Group, x: number, z: number, index: number, type: string) {
   const group = new THREE.Group();
-  group.position.set(x, -0.115, z);
+  group.position.set(x, -0.04, z);
   group.rotation.y = Math.atan2(x, z);
   parent.add(group);
-  const wood = material('#ae8656'),
-    darkWood = material('#735233'),
-    rope = material('#e7c99a');
+  const wood = material('#8f7756'),
+    darkWood = material('#574536'),
+    rope = material('#b5a78b');
   for (let i = 0; i < 7; i++) box(group, wood, 0, 0.03, -0.31 + i * 0.093, 0.28, 0.038, 0.075);
   for (const side of [-1, 1])
     for (const k of [-0.28, 0.22]) {
@@ -444,22 +174,47 @@ function harbor(parent: THREE.Group, x: number, z: number, index: number, type: 
   group.add(boat);
   const hull = solid(
     boat,
-    new THREE.SphereGeometry(0.18, 7, 4),
-    material(index % 2 ? '#bd654b' : '#e5bf6a'),
+    new THREE.SphereGeometry(0.18, 18, 10),
+    material(index % 2 ? '#745440' : '#816248', { flatShading: false }),
     0,
     0.022,
     0,
   );
   hull.scale.set(0.74, 0.4, 1.45);
   box(boat, darkWood, 0, 0.058, 0, 0.14, 0.02, 0.31);
+  for (let plank = 0; plank < 7; plank++)
+    box(boat, wood, 0, 0.073, -0.14 + plank * 0.043, 0.145, 0.009, 0.038);
+  for (const x of [-0.073, 0.073]) box(boat, darkWood, x, 0.089, 0, 0.012, 0.031, 0.25);
+  const ropeLine = (a: number[], b: number[]) => {
+    const geo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(...a),
+      new THREE.Vector3(...b),
+    ]);
+    boat.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: '#b7aa8c' })));
+  };
+  ropeLine([0, 0.475, 0], [0, 0.081, 0.2]);
+  ropeLine([0, 0.475, 0], [0, 0.081, -0.2]);
+  ropeLine([0, 0.345, 0], [-0.072, 0.081, 0.1]);
+  ropeLine([0, 0.345, 0], [0.072, 0.081, 0.1]);
   solid(boat, new THREE.CylinderGeometry(0.012, 0.016, 0.47, 5), darkWood, 0, 0.27, 0);
   const sailGeo = new THREE.BufferGeometry();
   sailGeo.setAttribute(
     'position',
-    new THREE.Float32BufferAttribute([0.015, 0.48, 0, 0.015, 0.12, 0.02, 0.22, 0.17, 0.035], 3),
+    new THREE.Float32BufferAttribute(
+      [0.015, 0.48, 0, 0.015, 0.12, 0.02, 0.22, 0.17, 0.035, 0.095, 0.25, 0.067],
+      3,
+    ),
   );
+  sailGeo.setIndex([0, 1, 3, 0, 3, 2, 1, 2, 3]);
   sailGeo.computeVertexNormals();
-  solid(boat, sailGeo, material('#fff1d4', { side: THREE.DoubleSide }), 0, 0, 0);
+  solid(
+    boat,
+    sailGeo,
+    material('#d9c9a6', { side: THREE.DoubleSide, flatShading: false }),
+    0,
+    0,
+    0,
+  );
   const flag = box(boat, material('#c86b4a'), 0.045, 0.48, 0, 0.1, 0.045, 0.012);
   flag.rotation.y = 0.3;
   const label = labelSprite(
@@ -530,7 +285,7 @@ export default function Board3D({
     renderer.shadowMap.needsUpdate = true;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    renderer.toneMappingExposure = 0.97;
     renderer.domElement.setAttribute(
       'aria-label',
       'Interactive 3D island. Drag to rotate, scroll to zoom, and click highlighted locations to build.',
@@ -539,11 +294,12 @@ export default function Board3D({
     renderer.domElement.style.touchAction = 'none';
     container.appendChild(renderer.domElement);
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#173d43');
-    scene.fog = new THREE.FogExp2('#173d43', 0.027);
+    scene.background = new THREE.Color('#233e43');
+    scene.fog = new THREE.FogExp2('#617679', 0.012);
     const island = new THREE.Group();
     scene.add(island);
     const board = current.current.state.board;
+    const terrainSurfaces = createTerrainMaterials();
     const minX = Math.min(...board.hexes.map((h) => h.x)) - 1,
       maxX = Math.max(...board.hexes.map((h) => h.x)) + 1;
     const minZ = Math.min(...board.hexes.map((h) => h.z)) - 1,
@@ -568,9 +324,9 @@ export default function Board3D({
       center.z + baseDistance * 0.9,
     );
     controls.update();
-    scene.add(new THREE.HemisphereLight('#f5f3d7', '#446870', 2.7));
-    const sun = new THREE.DirectionalLight('#fff0cf', 3.2);
-    sun.position.set(-5, 13, 7);
+    scene.add(new THREE.HemisphereLight('#dbe1d2', '#4e5146', 1.25));
+    const sun = new THREE.DirectionalLight('#ffdfb0', 3.35);
+    sun.position.set(-7, 10, 6);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.left = -11;
@@ -581,7 +337,7 @@ export default function Board3D({
     sun.shadow.bias = -0.00015;
     sun.shadow.radius = 3;
     scene.add(sun);
-    const fill = new THREE.DirectionalLight('#bce8e2', 1.3);
+    const fill = new THREE.DirectionalLight('#c2d7df', 0.6);
     fill.position.set(5, 7, -7);
     scene.add(fill);
     const waterMaterial = new THREE.ShaderMaterial({
@@ -593,15 +349,23 @@ export default function Board3D({
       vertexShader:
         'varying vec3 vWorld; void main(){ vec4 p=modelMatrix*vec4(position,1.0); vWorld=p.xyz; gl_Position=projectionMatrix*viewMatrix*p; }',
       fragmentShader: `uniform float time; uniform vec2 center; uniform float radius; varying vec3 vWorld;
-      void main(){ vec2 p=vWorld.xz-center; float d=length(p); float nearShore=1.-smoothstep(radius*.7,radius*1.8,d);
-      vec3 deep=vec3(.045,.18,.21); vec3 shallow=vec3(.10,.39,.40); vec3 col=mix(deep,shallow,nearShore*.82);
-      float ripple=sin(p.x*3.+p.y*4.-time*.6)*sin(p.x*4.-p.y*2.+time*.35); col+=ripple*.012;
-      float shimmer=pow(max(0.,sin(p.x*15.+p.y*21.+sin(p.y*5.)-time*.7)),38.); col+=vec3(.13,.24,.20)*shimmer*nearShore*.23;
-      gl_FragColor=vec4(col,1.); }`,
+      float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+      float noise(vec2 p){vec2 i=floor(p),f=fract(p); f=f*f*(3.-2.*f); return mix(mix(hash(i),hash(i+vec2(1.,0.)),f.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.)),f.x),f.y);}
+      float waves(vec2 p){float h=0.;float a=.48;for(int i=0;i<4;i++){h+=noise(p)*a;p=mat2(1.6,1.2,-1.2,1.6)*p+time*.016;a*=.5;}return h;}
+      void main(){vec2 p=vWorld.xz-center;float d=length(p);float coast=1.-smoothstep(radius*.65,radius*1.55,d);
+      vec2 moving=p*1.55+vec2(time*.022,-time*.034);float height=waves(moving);float e=.035;
+      vec3 n=normalize(vec3((height-waves(moving+vec2(e,0.)))*2.7,.42,(height-waves(moving+vec2(0.,e)))*2.7));
+      vec3 eye=normalize(cameraPosition-vWorld),sun=normalize(vec3(-.5,.7,.5));float fresnel=pow(1.-max(dot(eye,n),0.),3.);
+      vec3 col=mix(vec3(.025,.085,.115),vec3(.07,.225,.245),coast*.75);col+=height*.016;
+      col=mix(col,vec3(.21,.28,.28),fresnel*.35);float shine=pow(max(dot(n,normalize(sun+eye)),0.),115.);
+      col+=vec3(.95,.70,.36)*shine*.28;gl_FragColor=vec4(col,1.);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+      }`,
     });
     const sea = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), waterMaterial);
     sea.rotation.x = -Math.PI / 2;
-    sea.position.y = -0.285;
+    sea.position.y = -0.15;
     scene.add(sea);
     const terrainTargets: THREE.Object3D[] = [];
     for (const hex of board.hexes) {
@@ -611,7 +375,7 @@ export default function Board3D({
       const points = hex.vertices
         .map((id) => board.vertices.find((v) => v.id === id)!)
         .map((v) => ({ x: v.x - hex.x, z: v.z - hex.z }));
-      const mesh = hexTile(tile, points, hex.terrain);
+      const mesh = sculptedHex(tile, points, hex.terrain, terrainSurfaces, hex.id + 117);
       mesh.userData.hit = {
         kind: 'hex',
         id: hex.id,
@@ -619,23 +383,28 @@ export default function Board3D({
         actionable: false,
       } satisfies Hit;
       terrainTargets.push(mesh);
-      decorateTile(tile, hex.terrain, hex.id + 117);
+      decorateRealTerrain(tile, hex.terrain, hex.id + 117, terrainSurfaces);
       if (hex.number) {
         const token = labelSprite(
           String(hex.number),
           '',
           [6, 8].includes(hex.number) ? '#b74e3c' : '#3d4a3d',
         );
-        token.position.set(0, 0.26, 0.05);
+        token.position.set(0, 0.2, 0.05);
         tile.add(token);
       }
     }
     // Pale waterline follows the actual island boundary, including the extended board.
-    const shoreMaterial = new THREE.MeshBasicMaterial({
-      color: '#b5dcbd',
+    const shoreMaterial = new THREE.ShaderMaterial({
       transparent: true,
-      opacity: 0.27,
       depthWrite: false,
+      uniforms: { time: waterMaterial.uniforms.time },
+      vertexShader:
+        'varying vec2 vUv; varying vec3 world; void main(){ vUv=uv;vec4 p=modelMatrix*vec4(position,1.);world=p.xyz;gl_Position=projectionMatrix*viewMatrix*p;}',
+      fragmentShader: `uniform float time; varying vec2 vUv; varying vec3 world; void main(){
+        float wash=.5+.5*sin(vUv.x*41.+sin(world.x*11.)+time*.55);float broken=smoothstep(.25,.83,wash);
+        float edge=pow(max(0.,1.-abs(vUv.y-.5)*2.),2.);float ends=smoothstep(0.,.12,vUv.x)*smoothstep(0.,.12,1.-vUv.x);
+        gl_FragColor=vec4(.69,.77,.70,broken*edge*ends*.22); }`,
     });
     for (const edge of board.edges) {
       const a = board.vertices.find((v) => v.id === edge.a)!,
@@ -644,12 +413,12 @@ export default function Board3D({
       const mid = new THREE.Vector3((a.x + b.x) / 2, 0, (a.z + b.z) / 2);
       const outward = new THREE.Vector3(mid.x - center.x, 0, mid.z - center.z).normalize();
       const line = new THREE.Mesh(
-        new THREE.PlaneGeometry(Math.hypot(a.x - b.x, a.z - b.z) * 0.96, 0.1),
+        new THREE.PlaneGeometry(Math.hypot(a.x - b.x, a.z - b.z) * 0.96, 0.045),
         shoreMaterial,
       );
       line.rotation.x = -Math.PI / 2;
       line.rotation.z = -Math.atan2(b.z - a.z, b.x - a.x);
-      line.position.set(mid.x + outward.x * 0.09, -0.267, mid.z + outward.z * 0.09);
+      line.position.set(mid.x + outward.x * 0.09, -0.138, mid.z + outward.z * 0.09);
       scene.add(line);
     }
     const boats: THREE.Group[] = [];
@@ -687,7 +456,7 @@ export default function Board3D({
       glint.rotation.x = -Math.PI / 2;
       glint.position.set(
         center.x + Math.cos(angle) * distance,
-        -0.265,
+        -0.137,
         center.z + Math.sin(angle) * distance,
       );
       scene.add(glint);
@@ -1111,6 +880,9 @@ function batchStaticMeshes(root: THREE.Group, movingRoots: Set<THREE.Object3D>) 
       mat.flatShading,
       mat.depthTest,
       mat.depthWrite,
+      mat.map?.uuid,
+      mat.bumpMap?.uuid,
+      mat.bumpScale,
       object.castShadow,
       object.receiveShadow,
       Object.entries(object.geometry.attributes)
