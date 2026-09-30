@@ -62,7 +62,7 @@ Local play saves automatically in browser storage and hides the next player's ha
 | Restore the view                       | Board reset-view button                             |
 | See rules                              | **Field guide**                                     |
 
-Dice sound is optional. The landscape, trees, fields, rocks, ports, ocean, and building pieces are generated with Three.js; no external 3D asset download is required.
+Dice sound is optional. The landscape, trees, fields, rocks, ports, ocean, and medieval building pieces are generated with Three.js. Sculpted ground uses original high-detail material textures; the interface uses parchment, oak, brass, and period-inspired serif typography. All game art is included locally. See [art materials and exact generation prompts](docs/ART.md). Reduced-motion preferences freeze ocean and boat motion; inactive tabs pause rendering.
 
 ## Rules implemented
 
@@ -176,7 +176,10 @@ The engine suite checks board generation and rule behavior. The server integrati
 
 ```text
 src/App.tsx                 Lobby, turns, hands, dialogs, local save/rejoin
-src/components/Board3D.tsx   Procedural island, camera, piece rendering, picking
+src/components/Board3D.tsx   Island rendering, lighting, water, camera, picking
+src/components/TerrainScenery.ts  Sculpted terrain, plants, animals, medieval buildings
+src/medieval.css             Renaissance materials, typography, responsive theme
+public/textures/            Original terrain atlas, parchment, and oak materials
 src/game/board.ts           Hex topology, balanced token placement, harbors
 src/game/engine.ts          Pure authoritative rules and state transitions
 src/game/types.ts           Shared game types
@@ -187,4 +190,4 @@ Dockerfile                 Production image
 render.yaml                Optional deployment Blueprint
 ```
 
-Independent fan project, not affiliated with or endorsed by the CATAN rights holders. CATAN and related names belong to their respective owners. The landscape and interface visuals are original procedural/code assets, not extracted official artwork. Consult the official rulebooks for the tabletop game.
+Independent fan project, not affiliated with or endorsed by the CATAN rights holders. CATAN and related names belong to their respective owners. The landscape and interface use original procedural geometry, code assets, and generated material textures, not extracted official artwork. Consult the official rulebooks for the tabletop game.
