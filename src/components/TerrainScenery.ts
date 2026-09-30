@@ -174,7 +174,9 @@ export function createTerrainMaterials(): TerrainMaterials {
         const [col, row] = SWATCH[terrain];
         const borderX = 5 / atlas.image.width,
           borderY = 5 / atlas.image.height;
-        texture.image = atlas.image;
+        // One shared GPU image serves all six UV windows; avoid uploading the
+        // entire atlas six times when several multiplayer boards are open.
+        texture.source = atlas.source;
         texture.repeat.set(1 / 3 - borderX * 2, 1 / 2 - borderY * 2);
         texture.offset.set(col / 3 + borderX, row / 2 + borderY);
         texture.needsUpdate = true;

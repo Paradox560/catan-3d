@@ -604,6 +604,16 @@ export default function Board3D({
     };
   }, [topology]);
 
+  const solidLayout = [
+    state.robberHex,
+    state.players.map((player) => player.color).join(','),
+    state.board.edges.map((edge) => edge.owner ?? '-').join(','),
+    state.board.vertices
+      .map((vertex) => (vertex.building ? `${vertex.building.owner}:${vertex.building.type}` : '-'))
+      .join(','),
+  ].join('|');
+  const placementLayout = `${buildKind}:${interactive}:${state.currentPlayer}:${state.phase === 'robber'}:${legalIds.join(',')}`;
+  const lastShadowLayout = useRef('');
   useEffect(() => {
     const ref = sceneRef.current;
     if (!ref) return;
@@ -773,8 +783,16 @@ export default function Board3D({
         ref.pulse.push(marker);
       }
     }
-    ref.renderer.shadowMap.needsUpdate = true;
-  }, [state, buildKind, legalIds, interactive, topology]);
+    // Timber framing, roof tiles and windows remain detailed but share a draw
+    // call by material. Pulsing placement rings retain their own animation.
+    const batchedPieces = batchStaticMeshes(ref.pieces, new Set(ref.pulse));
+    ref.renderer.domElement.dataset.pieceMeshesBefore = String(batchedPieces.before);
+    ref.renderer.domElement.dataset.pieceMeshesAfter = String(batchedPieces.after);
+    if (lastShadowLayout.current !== solidLayout) {
+      ref.renderer.shadowMap.needsUpdate = true;
+      lastShadowLayout.current = solidLayout;
+    }
+  }, [solidLayout, placementLayout, topology]);
 
   useEffect(() => {
     if (!resetView) return;
@@ -883,6 +901,9 @@ function batchStaticMeshes(root: THREE.Group, movingRoots: Set<THREE.Object3D>) 
       mat.map?.uuid,
       mat.bumpMap?.uuid,
       mat.bumpScale,
+      mat.vertexColors,
+      mat.customProgramCacheKey(),
+      object.renderOrder,
       object.castShadow,
       object.receiveShadow,
       Object.entries(object.geometry.attributes)
@@ -918,6 +939,7 @@ function batchStaticMeshes(root: THREE.Group, movingRoots: Set<THREE.Object3D>) 
       continue;
     }
     const merged = new THREE.Mesh(geometry, mat);
+    merged.renderOrder = meshes[0].renderOrder;
     merged.castShadow = meshes[0].castShadow;
     merged.receiveShadow = meshes[0].receiveShadow;
     root.add(merged);
