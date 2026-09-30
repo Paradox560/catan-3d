@@ -174,9 +174,10 @@ export function createTerrainMaterials(): TerrainMaterials {
         const [col, row] = SWATCH[terrain];
         const borderX = 5 / atlas.image.width,
           borderY = 5 / atlas.image.height;
-        // One shared GPU image serves all six UV windows; avoid uploading the
-        // entire atlas six times when several multiplayer boards are open.
-        texture.source = atlas.source;
+        // Keep each texture's original Source identity: the procedural fallback
+        // may already have uploaded it before the atlas finishes loading. Three.js
+        // tracks disposal against that Source, so replace only its image contents.
+        texture.image = atlas.image;
         texture.repeat.set(1 / 3 - borderX * 2, 1 / 2 - borderY * 2);
         texture.offset.set(col / 3 + borderX, row / 2 + borderY);
         texture.needsUpdate = true;
