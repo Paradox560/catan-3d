@@ -73,6 +73,6 @@ async function request(path = '', method = 'GET', body?: unknown): Promise<Ranki
 
 export const loadRankings = () => request();
 export const saveRankings = (data: RankingsData) => request('', 'PUT', data);
-export const loginRankings = (password: string) => request('/login', 'POST', { password });
-export const setupRankings = (password: string) => request('/setup', 'POST', { password });
+export const loginRankings = (username: string, password: string) =>
+  request('/login', 'POST', { username, password });
 export const logoutRankings = () => request('/logout', 'POST', {});

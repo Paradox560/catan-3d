@@ -28,13 +28,7 @@ import {
   type RankingsData,
   type RecordedGame,
 } from '../rankings/model';
-import {
-  loadRankings,
-  loginRankings,
-  logoutRankings,
-  saveRankings,
-  setupRankings,
-} from '../rankings/client';
+import { loadRankings, loginRankings, logoutRankings, saveRankings } from '../rankings/client';
 import '../rankings.css';
 
 type Reply = Awaited<ReturnType<typeof loadRankings>>;
@@ -154,7 +148,7 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
   const [notice, setNotice] = useState('');
   const [authOpen, setAuthOpen] = useState(false);
   const [password, setPassword] = useState('');
-  const [confirmation, setConfirmation] = useState('');
+  const [username, setUsername] = useState('');
   const [authError, setAuthError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [draft, setDraft] = useState<GameDraft | null>(null);
@@ -168,7 +162,6 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const data = reply?.data;
   const owner = reply?.access.authenticated ?? false;
-  const setup = Boolean(reply && !reply.access.configured && reply.access.canSetup);
   const standings = useMemo(() => (data ? buildStandings(data) : []), [data]);
   const games = useMemo(
     () =>
@@ -214,19 +207,15 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
   function closeAuth() {
     setAuthOpen(false);
     setPassword('');
-    setConfirmation('');
+    setUsername('');
     setAuthError('');
   }
   async function authenticate(event: FormEvent) {
     event.preventDefault();
     setAuthError('');
-    if (setup && password !== confirmation) {
-      setAuthError('The passwords do not match.');
-      return;
-    }
     setAuthBusy(true);
     try {
-      const result = await (setup ? setupRankings(password) : loginRankings(password));
+      const result = await loginRankings(username, password);
       setReply((previous) =>
         previous && (draft || roster || deleteGame) ? { ...result, data: previous.data } : result,
       );
@@ -542,14 +531,22 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
                     setAuthError('');
                     setAuthOpen(true);
                   }}
-                  disabled={!reply.access.configured && !reply.access.canSetup}
+                  disabled={!reply.access.configured}
+                  title={
+                    !reply.access.configured ? 'Owner access has not been configured.' : undefined
+                  }
                 >
                   <LockKeyhole size={15} />
-                  {setup ? 'Set up owner access' : 'Owner sign in'}
+                  Owner sign in
                 </button>
               ))}
           </div>
         </div>
+        {reply && !reply.access.configured && (
+          <p className="rankings-field-hint" role="status">
+            Owner access has not been configured. The ledger is available to read.
+          </p>
+        )}
         {loadError && (
           <ErrorNotice>
             {loadError}{' '}
@@ -938,50 +935,37 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
       </main>
       {authOpen && reply && (
         <Modal
-          title={setup ? 'Set up owner access' : 'Owner sign in'}
-          subtitle={
-            setup
-              ? 'Choose a private password to protect this shared ledger.'
-              : 'Unlock the keeper’s desk to manage games and players.'
-          }
+          title="Owner sign in"
+          subtitle="Unlock the keeper’s desk to manage games and players."
           onClose={closeAuth}
           busy={authBusy}
         >
           <form onSubmit={(event) => void authenticate(event)} className="rankings-form">
-            <label htmlFor="rankings-password">
-              {setup ? 'Choose password' : 'Owner password'}
+            <label htmlFor="rankings-username">
+              Owner username
               <input
-                id="rankings-password"
-                type="password"
-                autoComplete={setup ? 'new-password' : 'current-password'}
+                id="rankings-username"
+                type="text"
+                autoComplete="username"
                 required
-                minLength={setup ? 10 : undefined}
-                maxLength={256}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
+                maxLength={128}
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
                 autoFocus
               />
             </label>
-            {setup && (
-              <>
-                <p className="rankings-field-hint">
-                  Use at least 10 characters. Only someone with this password can edit the rankings.
-                </p>
-                <label htmlFor="rankings-password-confirm">
-                  Confirm password
-                  <input
-                    id="rankings-password-confirm"
-                    type="password"
-                    autoComplete="new-password"
-                    required
-                    minLength={10}
-                    maxLength={256}
-                    value={confirmation}
-                    onChange={(event) => setConfirmation(event.target.value)}
-                  />
-                </label>
-              </>
-            )}
+            <label htmlFor="rankings-password">
+              Owner password
+              <input
+                id="rankings-password"
+                type="password"
+                autoComplete="current-password"
+                required
+                maxLength={1024}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </label>
             {authError && <ErrorNotice>{authError}</ErrorNotice>}
             <div className="rankings-modal-footer">
               <button
@@ -998,7 +982,7 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
                 disabled={authBusy}
               >
                 <LockKeyhole size={15} />
-                {authBusy ? 'Unlocking…' : setup ? 'Create owner password' : 'Unlock editing'}
+                {authBusy ? 'Unlocking…' : 'Unlock editing'}
               </button>
             </div>
           </form>
