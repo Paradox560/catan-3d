@@ -1,11 +1,13 @@
-// Merge the Catan match into your existing rules; preserve other apps' matches.
-// Replace the placeholder with the dedicated backend user's Firebase Authentication UID.
+// Merge this scoped match into the existing rules; preserve unrelated apps' matches.
+// The Vercel backend uses Google IAM through Workload Identity Federation.
+// Browser clients use the Catan API and require no direct Firestore access.
+// A broader matching allow still wins: exclude this subtree from broad client grants.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /catan/rankings/{document=**} {
-      allow read, write: if request.auth != null
-        && request.auth.uid == 'REPLACE_WITH_BACKEND_UID';
+      allow read, write: if false;
     }
+    // Preserve the rules for other applications here; do not replace them with this template.
   }
 }
