@@ -14,6 +14,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server/index.ts /app/server/rankings.ts /app/server/rankings-store.ts /app/server/rankings-storage.ts /app/server/rankings-firestore.ts /app/server/rankings-import.ts /app/server/firebase.ts /app/server/owner-auth.ts /app/server/owner-auth-firestore.ts ./server/
+COPY --from=build /app/server/firebase-web-auth.ts /app/server/firestore-rest.ts ./server/
 COPY --from=build /app/src/rankings/model.ts ./src/rankings/
 COPY --from=build /app/src/game/engine.ts /app/src/game/board.ts /app/src/game/types.ts ./src/game/
 RUN mkdir -p /app/server/data
