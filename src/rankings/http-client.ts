@@ -1,7 +1,7 @@
 import { validateRankings, type RankingsData } from './model';
-import { RankingsError, type RankingsReply } from './types';
+import { RankingsError, type RankingsAccess, type RankingsReply } from './types';
 
-async function request(path = '', method = 'GET', body?: unknown): Promise<RankingsReply> {
+async function requestPayload(path = '', method = 'GET', body?: unknown): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(`/api/rankings${path}`, {
@@ -27,23 +27,42 @@ async function request(path = '', method = 'GET', body?: unknown): Promise<Ranki
       response.status,
     );
   }
-  const result = payload as Partial<RankingsReply> & { error?: unknown };
   if (!response.ok) {
+    const error =
+      payload && typeof payload === 'object' && 'error' in payload ? payload.error : undefined;
     throw new RankingsError(
-      typeof result?.error === 'string' ? result.error : 'The request could not be completed.',
+      typeof error === 'string' ? error : 'The request could not be completed.',
       response.status,
     );
   }
+  return payload;
+}
+function access(payload: unknown): RankingsAccess {
+  const value =
+    payload && typeof payload === 'object' && 'access' in payload ? payload.access : undefined;
   if (
-    !result?.access ||
-    typeof result.access.authenticated !== 'boolean' ||
-    typeof result.access.configured !== 'boolean' ||
-    typeof result.access.canSetup !== 'boolean'
+    !value ||
+    typeof value !== 'object' ||
+    !('authenticated' in value) ||
+    typeof value.authenticated !== 'boolean' ||
+    !('configured' in value) ||
+    typeof value.configured !== 'boolean' ||
+    !('canSetup' in value) ||
+    typeof value.canSetup !== 'boolean'
   ) {
     throw new RankingsError('The rankings response could not be read. Please try again.', 502);
   }
+  return {
+    authenticated: value.authenticated,
+    configured: value.configured,
+    canSetup: value.canSetup,
+  };
+}
+async function request(path = '', method = 'GET', body?: unknown): Promise<RankingsReply> {
+  const payload = await requestPayload(path, method, body);
+  const permission = access(payload);
   try {
-    return { data: validateRankings(result.data), access: result.access };
+    return { data: validateRankings((payload as Partial<RankingsReply>).data), access: permission };
   } catch {
     throw new RankingsError(
       'The saved rankings could not be read. Your records have not been changed.',
@@ -52,6 +71,7 @@ async function request(path = '', method = 'GET', body?: unknown): Promise<Ranki
   }
 }
 
+export const loadRankingsAccess = async () => access(await requestPayload('/access'));
 export const loadRankings = () => request();
 export const saveRankings = (data: RankingsData) => request('', 'PUT', data);
 export const loginRankings = (username: string, password: string) =>
