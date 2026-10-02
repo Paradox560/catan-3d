@@ -18,13 +18,15 @@ Copy the values from **Firebase Console → Project settings → Your apps → W
 
 Enter plain values without surrounding quotes. The storage field ends in **STORAGE_BUCKET**, not `STORAGE_ID`. This is a Vite app, so `NEXT_PUBLIC_*` variables do not apply. `VITE_*` values are included in the browser bundle; they contain public Firebase identifiers only. Never put an owner password or service-account key there. [Vite environment variables](https://vite.dev/guide/env-and-mode), [Firebase web setup](https://firebase.google.com/docs/web/setup).
 
+In Vercel, select **Config** as the type for each of these seven variables and keep the `VITE_` prefix. If Vercel asks you to remove the public prefix to keep a value private, change its type to **Config**. Firebase web config, including its Firebase API key, is intended for the browser; Firebase Authentication and Firestore Rules protect access to the ledger. [Vercel variable types](https://vercel.com/changelog/environment-variables-now-use-config-and-secret-types), [Firebase API keys](https://firebase.google.com/docs/projects/api-keys).
+
 **Redeploy after saving the variables.** They are read during the build. Do not copy the entire local `.env.example` into Vercel; use the seven public fields above. The `FIREBASE_BACKEND_*` and `RANKINGS_ADMIN_*` variables are not used by the new rankings page.
 
 ## Owner sign-in and rules
 
 1. In Firebase Authentication, enable **Email/Password**.
 2. Create your owner user under **Authentication → Users**, then copy that user's UID. This is your own login, not a separate backend account.
-3. In [firestore.rules.example](../firestore.rules.example), replace `REPLACE_WITH_OWNER_UID` with that UID. Merge the Catan matches into your existing Firestore rules and publish them. Preserve rules for your inventory app and other collections. Remove any broader allow that exposes private Catan subcollections; Firestore rules combine matching allows.
+3. In [firestore.rules.example](../firestore.rules.example), replace `__CATAN_OWNER_UID__` with that UID. Merge the Catan matches into your existing Firestore rules and publish them. Preserve rules for your inventory app and other collections. Remove any broader allow that exposes private Catan subcollections; Firestore rules combine matching allows.
 4. Add `catan-3d-ebon.vercel.app` to **Authentication → Settings → Authorized domains**. Add a custom website domain if you use one.
 5. Open the site's **Rankings → Owner sign in**, then enter the Firebase user's email and password. They are typed into the login form, not stored in Vercel environment variables.
 

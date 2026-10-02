@@ -26,7 +26,7 @@ A successful save means Firestore acknowledged it. Offline or failed writes do n
 
 ## Owner access
 
-Enable Firebase Authentication Email/Password and create your own user. Replace `REPLACE_WITH_OWNER_UID` in the rules template with that user's UID and publish the merged rules. The owner signs in through the website. Passwords belong in Firebase Auth and the sign-in form, never in public environment variables. No separate owner UID environment variable is needed: the app checks the rules-protected owner access path.
+Enable Firebase Authentication Email/Password and create your own user. Replace `__CATAN_OWNER_UID__` in the rules template with that user's UID and publish the merged rules. The owner signs in through the website. Passwords belong in Firebase Auth and the sign-in form, never in public environment variables. No separate owner UID environment variable is needed: the app checks the rules-protected owner access path.
 
 Client rules do not restrict Google IAM identities such as the existing multiplayer server. Keep that backend's permissions and credentials server-only. [Firebase rules and server access](https://firebase.google.com/docs/firestore/security/get-started).
 
