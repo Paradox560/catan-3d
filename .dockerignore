@@ -10,3 +10,9 @@ test-results
 playwright-report
 coverage
 *.log
+
+secrets
+**/secrets
+**/*service-account*.json
+**/*serviceAccount*.json
+**/*firebase-adminsdk*.json

@@ -11,3 +11,9 @@ coverage/
 .env.*
 !.env.example
 *.tsbuildinfo
+
+# Server credentials must never be committed.
+secrets/
+**/*service-account*.json
+**/*serviceAccount*.json
+**/*firebase-adminsdk*.json
