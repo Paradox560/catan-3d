@@ -28,7 +28,14 @@ import {
   type RankingsData,
   type RecordedGame,
 } from '../rankings/model';
-import { loadRankings, loginRankings, logoutRankings, saveRankings } from '../rankings/client';
+import {
+  loadRankings,
+  loginRankings,
+  logoutRankings,
+  saveRankings,
+  usesFirebaseRankings,
+  watchRankingsAccess,
+} from '../rankings/client';
 import '../rankings.css';
 
 type Reply = Awaited<ReturnType<typeof loadRankings>>;
@@ -203,6 +210,15 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
       mounted = false;
     };
   }, []);
+
+  useEffect(
+    () =>
+      watchRankingsAccess((access) => {
+        // Permission changes must not replace an unsaved game or roster draft.
+        setReply((current) => (current ? { ...current, access } : current));
+      }),
+    [],
+  );
 
   function closeAuth() {
     setAuthOpen(false);
@@ -936,19 +952,23 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
       {authOpen && reply && (
         <Modal
           title="Owner sign in"
-          subtitle="Unlock the keeper’s desk to manage games and players."
+          subtitle={
+            usesFirebaseRankings
+              ? 'Sign in with your owner email to manage games and players.'
+              : 'Unlock the keeper’s desk to manage games and players.'
+          }
           onClose={closeAuth}
           busy={authBusy}
         >
           <form onSubmit={(event) => void authenticate(event)} className="rankings-form">
             <label htmlFor="rankings-username">
-              Owner username
+              {usesFirebaseRankings ? 'Owner email' : 'Owner username'}
               <input
                 id="rankings-username"
-                type="text"
+                type={usesFirebaseRankings ? 'email' : 'text'}
                 autoComplete="username"
                 required
-                maxLength={128}
+                maxLength={usesFirebaseRankings ? 254 : 128}
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
                 autoFocus
