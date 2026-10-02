@@ -1,85 +1,78 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sdk = vi.hoisted(() => ({
-  initializeApp: vi.fn(),
-  deleteApp: vi.fn(),
-  initializeAuth: vi.fn(),
-  connectAuthEmulator: vi.fn(),
-  signInWithEmailAndPassword: vi.fn(),
-  inMemoryPersistence: { type: 'NONE' },
+  fromJSON: vi.fn(),
+  getAccessToken: vi.fn(),
+  getVercelOidcToken: vi.fn(),
+  setCredentials: vi.fn(),
 }));
-vi.mock('firebase/app', () => ({ initializeApp: sdk.initializeApp, deleteApp: sdk.deleteApp }));
-vi.mock('firebase/auth', () => ({
-  initializeAuth: sdk.initializeAuth,
-  connectAuthEmulator: sdk.connectAuthEmulator,
-  signInWithEmailAndPassword: sdk.signInWithEmailAndPassword,
-  inMemoryPersistence: sdk.inMemoryPersistence,
-}));
+vi.mock('@vercel/oidc', () => ({ getVercelOidcToken: sdk.getVercelOidcToken }));
+vi.mock('google-auth-library', () => ({ ExternalAccountClient: { fromJSON: sdk.fromJSON } }));
 
 import { createWebAuth, parseWebAuthConfig } from './firebase-web-auth.js';
 
 const configured: NodeJS.ProcessEnv = {
   NODE_ENV: 'test',
+  VERCEL: '1',
   FIREBASE_API_KEY: 'fixture-api-key-never-a-real-key',
   FIREBASE_AUTH_DOMAIN: 'fixture-catan.firebaseapp.com',
   FIREBASE_PROJECT_ID: 'fixture-catan',
   FIREBASE_APP_ID: '1:123456789:web:012345abcdef',
-  FIREBASE_BACKEND_EMAIL: 'backend@example.invalid',
-  FIREBASE_BACKEND_PASSWORD: 'isolated-fixture-password',
-  FIREBASE_BACKEND_UID: 'test-backend-uid',
 };
 const emulator = {
   ...configured,
+  VERCEL: undefined,
   FIREBASE_PROJECT_ID: 'demo-catan-rankings',
-  FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
   FIRESTORE_EMULATOR_HOST: '127.0.0.1:8181',
 };
-const app = { name: 'mock-app' };
-const auth = { app };
-function result(overrides: Record<string, unknown> = {}) {
-  return {
-    token: 'fixture-bearer-never-a-real-token',
-    claims: {
-      aud: configured.FIREBASE_PROJECT_ID,
-      iss: `https://securetoken.google.com/${configured.FIREBASE_PROJECT_ID}`,
-      sub: configured.FIREBASE_BACKEND_UID,
-      user_id: configured.FIREBASE_BACKEND_UID,
-      exp: Math.floor(Date.now() / 1_000) + 3_600,
-      ...overrides,
-    },
-  };
-}
-let getIdTokenResult: ReturnType<typeof vi.fn>;
+const provider =
+  'iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/catan-vercel/providers/vercel';
+const failure =
+  'Firebase keyless authentication failed. Check Vercel OIDC and the Google Cloud workload identity setup.';
+const closed = 'Firebase backend authentication has been closed.';
+const bearer = 'fixture-access-token-never-a-real-token';
+
 beforeEach(() => {
   vi.resetAllMocks();
   vi.stubEnv('NODE_ENV', 'test');
+  vi.stubEnv('VERCEL', undefined);
   vi.stubEnv('FIREBASE_AUTH_EMULATOR_HOST', undefined);
   vi.stubEnv('FIRESTORE_EMULATOR_HOST', undefined);
-  sdk.initializeApp.mockReturnValue(app);
-  sdk.initializeAuth.mockReturnValue(auth);
-  sdk.deleteApp.mockResolvedValue(undefined);
-  getIdTokenResult = vi.fn().mockResolvedValue(result());
-  sdk.signInWithEmailAndPassword.mockResolvedValue({
-    user: { uid: configured.FIREBASE_BACKEND_UID, getIdTokenResult },
+  sdk.fromJSON.mockImplementation((options) => ({
+    getAccessToken: () => sdk.getAccessToken(options),
+    setCredentials: sdk.setCredentials,
+  }));
+  sdk.getAccessToken.mockImplementation(async (options) => {
+    await options.subject_token_supplier.getSubjectToken();
+    return { token: bearer };
   });
+  sdk.getVercelOidcToken.mockResolvedValue('fixture.subject.token');
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
 
 describe('Firebase Console web configuration', () => {
-  it('parses individual values synchronously without initializing the SDK or signing in', () => {
-    const value = parseWebAuthConfig(configured);
-    expect(value.options).toEqual({
+  it('parses standard web values without backend account variables or network activity', () => {
+    const parsed = parseWebAuthConfig(configured);
+    expect(parsed.options).toEqual({
       apiKey: configured.FIREBASE_API_KEY,
       authDomain: configured.FIREBASE_AUTH_DOMAIN,
       projectId: configured.FIREBASE_PROJECT_ID,
       appId: configured.FIREBASE_APP_ID,
     });
-    expect(value.backend.uid).toBe(configured.FIREBASE_BACKEND_UID);
-    expect(sdk.initializeApp).not.toHaveBeenCalled();
-    expect(sdk.signInWithEmailAndPassword).not.toHaveBeenCalled();
+    expect(parsed.projectNumber).toBe('123456789');
+    expect(parsed.workload).toEqual({
+      audience: `//${provider}`,
+      oidcAudience: `https://${provider}`,
+      serviceAccount: 'catan-api@fixture-catan.iam.gserviceaccount.com',
+    });
+    expect(parsed).not.toHaveProperty('backend');
+    expect(sdk.fromJSON).not.toHaveBeenCalled();
+    expect(sdk.getVercelOidcToken).not.toHaveBeenCalled();
   });
-  it('accepts an unwrapped Console JSON object with optional fields', () => {
-    const { backend } = parseWebAuthConfig(configured);
+  it('accepts the exact Console JSON keys with optional fields', () => {
     const options = {
       apiKey: configured.FIREBASE_API_KEY,
       authDomain: configured.FIREBASE_AUTH_DOMAIN,
@@ -90,13 +83,32 @@ describe('Firebase Console web configuration', () => {
       measurementId: 'G-TEST123',
       databaseURL: 'https://fixture-catan.firebaseio.com',
     };
+    expect(parseWebAuthConfig({ FIREBASE_CONFIG: JSON.stringify(options) }).options).toEqual(
+      options,
+    );
+  });
+  it('does not let arbitrary JSON fields override trusted identity URLs', () => {
+    const options = parseWebAuthConfig(configured).options;
     const parsed = parseWebAuthConfig({
-      FIREBASE_CONFIG: JSON.stringify(options),
-      FIREBASE_BACKEND_EMAIL: backend.email,
-      FIREBASE_BACKEND_PASSWORD: backend.password,
-      FIREBASE_BACKEND_UID: backend.uid,
+      FIREBASE_CONFIG: JSON.stringify({
+        ...options,
+        token_url: 'https://attacker.invalid',
+        audience: '//attacker.invalid',
+        credential_source: { file: '/private/file' },
+      }),
     });
     expect(parsed.options).toEqual(options);
+    expect(parsed.workload.audience).toBe(`//${provider}`);
+  });
+  it('ignores retired backend account variables', () => {
+    expect(
+      parseWebAuthConfig({
+        ...configured,
+        FIREBASE_BACKEND_EMAIL: '',
+        FIREBASE_BACKEND_PASSWORD: '',
+        FIREBASE_BACKEND_UID: '',
+      }),
+    ).toEqual(parseWebAuthConfig(configured));
   });
   it.each([
     'FIREBASE_API_KEY',
@@ -127,158 +139,221 @@ describe('Firebase Console web configuration', () => {
     ['FIREBASE_AUTH_DOMAIN', undefined],
     ['FIREBASE_APP_ID', undefined],
     ['FIREBASE_APP_ID', '1:123:android:abcdef'],
-    ['FIREBASE_BACKEND_EMAIL', undefined],
-    ['FIREBASE_BACKEND_EMAIL', 'not-an-email'],
-    ['FIREBASE_BACKEND_PASSWORD', undefined],
-    ['FIREBASE_BACKEND_PASSWORD', 'short'],
-    ['FIREBASE_BACKEND_UID', undefined],
-    ['FIREBASE_BACKEND_UID', ' leading-space'],
-    ['FIREBASE_BACKEND_UID', 'x'.repeat(129)],
+    ['FIREBASE_APP_ID', '1:../../etc:web:abcdef'],
+    ['FIREBASE_APP_ID', '1:000123:web:abcdef'],
+    ['FIREBASE_APP_ID', '1:123456789012345678901:web:abcdef'],
     ['FIREBASE_MESSAGING_SENDER_ID', 'not-numeric'],
+    ['FIREBASE_MESSAGING_SENDER_ID', '987654321'],
     ['FIREBASE_DATABASE_URL', 'http://untrusted.invalid'],
+    ['FIREBASE_DATABASE_URL', 'https://user:password@untrusted.invalid'],
   ])('rejects invalid or missing %s (%#)', (key, value) => {
     expect(() => parseWebAuthConfig({ ...configured, [key as string]: value })).toThrow(
       key as string,
     );
   });
+  it('preserves project numbers as strings without numeric rounding', () => {
+    const parsed = parseWebAuthConfig({
+      ...configured,
+      FIREBASE_APP_ID: '1:12345678901234567890:web:abcdef',
+      FIREBASE_MESSAGING_SENDER_ID: '12345678901234567890',
+    });
+    expect(parsed.projectNumber).toBe('12345678901234567890');
+    expect(parsed.workload.audience).toContain('/12345678901234567890/');
+  });
 });
 
-describe('isolated Auth and Firestore emulators', () => {
-  it('accepts paired loopback endpoints only for nonproduction demo projects', () => {
-    expect(parseWebAuthConfig(emulator).authEmulatorHost).toBe('127.0.0.1:9099');
+describe('isolated Firestore emulator', () => {
+  it('accepts a loopback Firestore endpoint alone for a nonproduction demo project', async () => {
+    expect(parseWebAuthConfig(emulator).firestoreEmulatorHost).toBe('127.0.0.1:8181');
     expect(
-      parseWebAuthConfig({ ...emulator, FIREBASE_AUTH_EMULATOR_HOST: '[::1]:9099' })
-        .authEmulatorHost,
-    ).toBe('[::1]:9099');
+      parseWebAuthConfig({ ...emulator, FIRESTORE_EMULATOR_HOST: '[::1]:8181' })
+        .firestoreEmulatorHost,
+    ).toBe('[::1]:8181');
+    const connection = createWebAuth(emulator);
+    expect(await connection.getToken()).toBe('owner');
+    expect(sdk.fromJSON).not.toHaveBeenCalled();
+    expect(sdk.getVercelOidcToken).not.toHaveBeenCalled();
+    await connection.close();
+    await expect(connection.getToken()).rejects.toThrow(closed);
+  });
+  it('allows an unrelated loopback Auth emulator alongside isolated Firestore', () => {
+    expect(() =>
+      parseWebAuthConfig({ ...emulator, FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099' }),
+    ).not.toThrow();
   });
   it.each([
-    { FIREBASE_AUTH_EMULATOR_HOST: undefined },
     { FIRESTORE_EMULATOR_HOST: undefined },
     { FIREBASE_PROJECT_ID: 'fixture-real-project' },
     { NODE_ENV: 'production' },
-    { FIREBASE_AUTH_EMULATOR_HOST: 'https://localhost:9099' },
-    { FIREBASE_AUTH_EMULATOR_HOST: 'remote.invalid:9099' },
+    { VERCEL: '1' },
+    { FIRESTORE_EMULATOR_HOST: 'https://localhost:8181' },
+    { FIRESTORE_EMULATOR_HOST: 'remote.invalid:8181' },
     { FIRESTORE_EMULATOR_HOST: '127.0.0.1:0' },
-    { FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:65536' },
+    { FIRESTORE_EMULATOR_HOST: '127.0.0.1:65536' },
   ])('rejects cloud/emulator mixing or unsafe endpoints (%#)', (values) => {
     expect(() => parseWebAuthConfig({ ...emulator, ...values })).toThrow();
   });
-  it('rejects demo projects without both emulators', () => {
-    expect(() => parseWebAuthConfig({ ...configured, FIREBASE_PROJECT_ID: 'demo-catan' })).toThrow(
-      /both Firebase Auth and Firestore emulators/,
-    );
+  it('rejects an isolated Auth emulator for a cloud project', () => {
+    expect(() =>
+      parseWebAuthConfig({ ...configured, FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099' }),
+    ).toThrow(/cloud Firestore/);
   });
   it('validates inherited process emulator configuration and rejects mismatches', () => {
-    vi.stubEnv('FIREBASE_AUTH_EMULATOR_HOST', 'remote.invalid:9099');
+    vi.stubEnv('FIRESTORE_EMULATOR_HOST', 'remote.invalid:8181');
     expect(() => parseWebAuthConfig(configured)).toThrow(/loopback/);
     expect(() => parseWebAuthConfig(emulator)).toThrow(/differs from the process/);
   });
-  it('rejects emulators when the actual process is production', () => {
-    vi.stubEnv('NODE_ENV', 'production');
-    expect(() => parseWebAuthConfig(emulator)).toThrow(/outside production/);
-  });
-  it('connects emulator Auth without console warnings before lazy sign-in', async () => {
-    const connection = createWebAuth(emulator);
-    expect(sdk.connectAuthEmulator).toHaveBeenCalledWith(auth, 'http://127.0.0.1:9099', {
-      disableWarnings: true,
-    });
-    expect(sdk.signInWithEmailAndPassword).not.toHaveBeenCalled();
-    await connection.close();
+  it.each([
+    ['NODE_ENV', 'production'],
+    ['VERCEL', '1'],
+  ])('rejects emulator bypass through actual process %s', (key, value) => {
+    vi.stubEnv(key, value);
+    expect(() => parseWebAuthConfig(emulator)).toThrow(/outside production and Vercel/);
   });
 });
 
-describe('trusted backend authentication', () => {
-  it('sanitizes SDK initialization failures', () => {
-    sdk.initializeApp.mockImplementationOnce(() => {
-      throw new Error('SECRET-INIT-VALUE');
-    });
-    expect(() => createWebAuth(configured)).toThrow(
-      'Firebase backend authentication failed. Check the dedicated account, configured UID, and Firebase web configuration.',
-    );
-  });
-  it('initializes in-memory identity and combines simultaneous sign-ins into one operation', async () => {
+describe('keyless Vercel workload identity', () => {
+  it('exchanges only on demand and combines simultaneous calls', async () => {
     const connection = createWebAuth(configured);
     expect(connection.projectId).toBe(configured.FIREBASE_PROJECT_ID);
-    expect(sdk.initializeAuth).toHaveBeenCalledWith(app, { persistence: sdk.inMemoryPersistence });
-    expect(sdk.signInWithEmailAndPassword).not.toHaveBeenCalled();
-    const values = await Promise.all([
-      connection.getToken(),
-      connection.getToken(),
-      connection.getToken(),
-    ]);
-    expect(values).toEqual(Array(3).fill('fixture-bearer-never-a-real-token'));
-    expect(sdk.signInWithEmailAndPassword).toHaveBeenCalledTimes(1);
-    expect(getIdTokenResult).toHaveBeenCalledTimes(1);
-    await connection.close();
-  });
-  it('uses SDK refreshes on later requests without signing in again', async () => {
-    const connection = createWebAuth(configured);
-    await connection.getToken();
-    getIdTokenResult.mockResolvedValueOnce({ ...result(), token: 'refreshed-fixture-token' });
-    expect(await connection.getToken()).toBe('refreshed-fixture-token');
-    expect(sdk.signInWithEmailAndPassword).toHaveBeenCalledTimes(1);
-    expect(getIdTokenResult).toHaveBeenCalledTimes(2);
-    await connection.close();
-  });
-  it('rejects the wrong signed-in UID before requesting its token', async () => {
-    sdk.signInWithEmailAndPassword.mockResolvedValueOnce({
-      user: { uid: 'wrong-account', getIdTokenResult },
+    expect(sdk.fromJSON).not.toHaveBeenCalled();
+    expect(sdk.getVercelOidcToken).not.toHaveBeenCalled();
+    expect(
+      await Promise.all([connection.getToken(), connection.getToken(), connection.getToken()]),
+    ).toEqual(Array(3).fill(bearer));
+    expect(sdk.fromJSON).toHaveBeenCalledOnce();
+    expect(sdk.getAccessToken).toHaveBeenCalledOnce();
+    expect(sdk.getVercelOidcToken).toHaveBeenCalledWith({ audience: `https://${provider}` });
+    expect(sdk.fromJSON.mock.calls[0][0]).toMatchObject({
+      type: 'external_account',
+      audience: `//${provider}`,
+      subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+      token_url: 'https://sts.googleapis.com/v1/token',
+      service_account_impersonation_url:
+        'https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/catan-api@fixture-catan.iam.gserviceaccount.com:generateAccessToken',
+      scopes: ['https://www.googleapis.com/auth/datastore'],
+      transporterOptions: { timeout: 5_000, retryConfig: { retry: 0 } },
     });
-    const connection = createWebAuth(configured);
-    await expect(connection.getToken()).rejects.toThrow(/configured UID/);
-    expect(getIdTokenResult).not.toHaveBeenCalled();
     await connection.close();
   });
-  it.each([
-    { aud: 'wrong-project' },
-    { aud: ['fixture-catan'] },
-    { iss: 'https://securetoken.google.com/wrong-project' },
-    { sub: 'wrong-account' },
-    { user_id: 'wrong-account' },
-    { exp: 1 },
-    { exp: 'not-a-timestamp' },
-  ])('rejects a token for a different project/account or an expired token (%#)', async (claims) => {
-    getIdTokenResult.mockResolvedValueOnce(result(claims));
-    const connection = createWebAuth(configured);
-    await expect(connection.getToken()).rejects.toThrow(/backend authentication failed/);
-    await connection.close();
-  });
-  it('sanitizes sign-in failures and allows a later request to retry', async () => {
-    sdk.signInWithEmailAndPassword.mockRejectedValueOnce(new Error('SECRET-CONTENT-MUST-NOT-LEAK'));
-    const connection = createWebAuth(configured);
-    await expect(connection.getToken()).rejects.toThrow(
-      'Firebase backend authentication failed. Check the dedicated account, configured UID, and Firebase web configuration.',
-    );
-    expect(await connection.getToken()).toBe('fixture-bearer-never-a-real-token');
-    expect(sdk.signInWithEmailAndPassword).toHaveBeenCalledTimes(2);
-    await connection.close();
-  });
-  it('sanitizes SDK refresh failures and never returns an old token', async () => {
+  it('reuses SDK access-token caching and obtains fresh Vercel subjects when SDK refreshes', async () => {
     const connection = createWebAuth(configured);
     await connection.getToken();
-    getIdTokenResult.mockRejectedValueOnce(new Error('SECRET-REFRESH-TOKEN'));
-    await expect(connection.getToken()).rejects.toThrow(/backend authentication failed/);
+    sdk.getVercelOidcToken.mockResolvedValueOnce('rotated.subject.token');
+    sdk.getAccessToken.mockImplementationOnce(async (options) => {
+      expect(await options.subject_token_supplier.getSubjectToken()).toBe('rotated.subject.token');
+      return { token: 'refreshed-access-token' };
+    });
+    expect(await connection.getToken()).toBe('refreshed-access-token');
+    expect(sdk.fromJSON).toHaveBeenCalledOnce();
+    expect(sdk.getVercelOidcToken).toHaveBeenCalledTimes(2);
     await connection.close();
   });
-  it('closes once and prevents further token requests', async () => {
-    const connection = createWebAuth(configured);
-    await Promise.all([connection.close(), connection.close()]);
-    expect(sdk.deleteApp).toHaveBeenCalledTimes(1);
-    await expect(connection.getToken()).rejects.toThrow(/has been closed/);
+  it('fails closed outside Vercel without initializing or retrieving identity', async () => {
+    const connection = createWebAuth({ ...configured, VERCEL: undefined });
+    await expect(connection.getToken()).rejects.toThrow(/requires a Vercel runtime/);
+    expect(sdk.fromJSON).not.toHaveBeenCalled();
+    expect(sdk.getVercelOidcToken).not.toHaveBeenCalled();
+    await connection.close();
   });
-  it('prevents a pending sign-in from releasing a token after close', async () => {
-    let finish!: (value: unknown) => void;
-    sdk.signInWithEmailAndPassword.mockReturnValueOnce(
-      new Promise((resolve) => {
-        finish = resolve;
+  it('recognizes the real Vercel process when a narrower environment object is passed', async () => {
+    vi.stubEnv('VERCEL', '1');
+    const connection = createWebAuth({ ...configured, VERCEL: undefined });
+    expect(await connection.getToken()).toBe(bearer);
+    await connection.close();
+  });
+  it.each([null, undefined, '', 'token\r\nheader', 'x'.repeat(16_385)])(
+    'rejects malformed access tokens without returning data (%#)',
+    async (token) => {
+      sdk.getAccessToken.mockResolvedValueOnce({ token });
+      const connection = createWebAuth(configured);
+      await expect(connection.getToken()).rejects.toThrow(failure);
+      await connection.close();
+    },
+  );
+  it.each([undefined, '', 'bad token', 'x'.repeat(16_385)])(
+    'rejects malformed Vercel subjects (%#)',
+    async (subject) => {
+      sdk.getVercelOidcToken.mockResolvedValueOnce(subject);
+      const connection = createWebAuth(configured);
+      await expect(connection.getToken()).rejects.toThrow(failure);
+      await connection.close();
+    },
+  );
+  it.each(['initialization', 'oidc', 'exchange'])(
+    'sanitizes %s errors and permits recovery',
+    async (stage) => {
+      const secret = new Error('SECRET_RESPONSE_WITH_PRIVATE_TOKEN');
+      if (stage === 'initialization')
+        sdk.fromJSON.mockImplementationOnce(() => {
+          throw secret;
+        });
+      if (stage === 'oidc') sdk.getVercelOidcToken.mockRejectedValueOnce(secret);
+      if (stage === 'exchange') sdk.getAccessToken.mockRejectedValueOnce(secret);
+      const connection = createWebAuth(configured);
+      const error = await connection.getToken().catch((value: unknown) => value);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(failure);
+      expect((error as Error).cause).toBeUndefined();
+      expect(await connection.getToken()).toBe(bearer);
+      await connection.close();
+    },
+  );
+  it('sanitizes a failed SDK constructor returning no client', async () => {
+    sdk.fromJSON.mockReturnValueOnce(null);
+    const connection = createWebAuth(configured);
+    await expect(connection.getToken()).rejects.toThrow(failure);
+    await connection.close();
+  });
+  it('bounds a hung exchange and recovers while discarding a late result', async () => {
+    vi.useFakeTimers();
+    let resolve!: (value: { token: string }) => void;
+    sdk.getAccessToken.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    const connection = createWebAuth(configured);
+    const first = connection.getToken();
+    const rejection = expect(first).rejects.toThrow(failure);
+    await vi.advanceTimersByTimeAsync(12_000);
+    await rejection;
+    expect(await connection.getToken()).toBe(bearer);
+    resolve({ token: 'late-token-that-must-not-be-used' });
+    await Promise.resolve();
+    expect(sdk.setCredentials).toHaveBeenCalledWith({});
+    await connection.close();
+  });
+  it('closes promptly during an in-flight exchange and never returns its late token', async () => {
+    let resolve!: (value: { token: string }) => void;
+    sdk.getAccessToken.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
       }),
     );
     const connection = createWebAuth(configured);
     const pending = connection.getToken();
-    const closing = connection.close();
-    finish({ user: { uid: configured.FIREBASE_BACKEND_UID, getIdTokenResult } });
-    await expect(pending).rejects.toThrow(/backend authentication failed/);
-    await closing;
-    expect(getIdTokenResult).not.toHaveBeenCalled();
+    const rejection = expect(pending).rejects.toThrow(closed);
+    await connection.close();
+    await rejection;
+    resolve({ token: 'late-token-that-must-not-be-used' });
+    await Promise.resolve();
+    await expect(connection.getToken()).rejects.toThrow(closed);
+    await connection.close();
+  });
+  it('refuses to start Google exchange when a pending subject token arrives after close', async () => {
+    let resolve!: (value: string) => void;
+    sdk.getVercelOidcToken.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    const connection = createWebAuth(configured);
+    const pending = connection.getToken();
+    const rejection = expect(pending).rejects.toThrow(closed);
+    await connection.close();
+    resolve('late.subject.token');
+    await rejection;
+    await Promise.resolve();
   });
 });
