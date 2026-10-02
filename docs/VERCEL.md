@@ -2,6 +2,8 @@
 
 This repository includes a Vercel deployment for the 3D frontend, shared rankings, owner editing, and online rooms. The linked project is **catan-3d** in **pranavs-projects-e233eba1**. Project linkage is local CLI metadata; it does not contain Firebase credentials and is excluded from Git.
 
+Production: [catan-3d-ebon.vercel.app](https://catan-3d-ebon.vercel.app). Configure the deployment in [this project's environment settings](https://vercel.com/pranavs-projects-e233eba1/catan-3d/settings/environment-variables).
+
 ## Environment variables to add
 
 In the Vercel project, open **Settings → Environment Variables**. Add these values to **Production**. Add them to **Preview** too if preview deployments should access the same records. Sharing a Firestore document means previews and production can edit the same ledger; use another document path when you want isolated preview records.
@@ -75,6 +77,17 @@ Players poll room updates about every two seconds while the page is visible and 
 Optional Firestore TTL cleanup can target the `expiresAt` field in the transient `ownerSessions`, `ownerRateLimits`, `onlineRooms`, and `onlineLimits` collection groups. The app checks expiration itself, so cleanup is not required for correctness. Keep backups for permanent player and game records. See [Firestore storage and access](FIRESTORE.md).
 
 The standard `npm start` / Docker server continues to use Socket.IO for online play, with one Node process and persistent disk for its local room saves. It is a separate transport from Vercel's shared Firestore room API. Local pass-and-play always saves in that browser.
+
+The rankings API currently exchanges the complete ledger. Large archives must stay below [Vercel's function payload limits](https://vercel.com/docs/functions/limitations); pagination will be needed before an archive approaches the 4.5 MB request/response ceiling.
+
+To verify hosted multiplayer behavior locally, start the isolated Firestore emulator described in [Firestore verification](FIRESTORE.md#emulator-verification), then run:
+
+```sh
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8181 npm run test:online-http
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8181 npm run test:online-browser
+```
+
+These tests use isolated demo projects. The browser checks complete four- and six-player setup, reconnect a saved seat, and advance turns using the Vercel API entry point.
 
 ## Troubleshooting
 
