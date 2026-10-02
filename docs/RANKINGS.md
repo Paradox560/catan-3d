@@ -8,48 +8,28 @@ Each game records a date, two to six players, optional notes, and each player's 
 
 ## Owner access
 
-Configure both private server environment variables:
+The normal rankings page uses **Firebase Authentication**. Follow [the setup guide](VERCEL.md), enable Email/Password, create your owner user, and place that user's UID in the scoped Firestore rules. Then open **Owner sign in** and enter your Firebase email/password.
 
-| Variable                  | Requirement                                                                                      |
-| ------------------------- | ------------------------------------------------------------------------------------------------ |
-| `RANKINGS_ADMIN_USERNAME` | Your chosen username, 1–128 characters without leading/trailing whitespace or control characters |
-| `RANKINGS_ADMIN_PASSWORD` | Your chosen password, at least 10 characters and at most 1,024 UTF-8 bytes                       |
+There are no owner credentials in Vercel environment variables for this mode. The seven public `VITE_FIREBASE_*` fields initialize the SDK; Firestore rules determine who can edit. Only the owner's account passes the protected permission check. Other Firebase accounts cannot edit the ledger.
 
-Locally, set them in the ignored `.env` file and restart `npm start` or `npm run dev`. On Vercel, add them to the project's environment settings and redeploy. These are the website owner credentials. On Vercel, the deployment identity obtains database access after the one-time cloud permissions setup; no Firebase backend account is required. See the [Firebase and Vercel configuration checklist](VERCEL.md). Open `/#rankings`, choose **Owner sign in**, and enter both values. Sign out when you finish on a shared computer.
+Sign-in persists for the current browser tab session, including refreshes. **Lock editing** signs out. The page updates editing access when authentication changes while retaining unsaved drafts. When a save requires a new login, the draft remains available afterward. There is no public owner-registration form.
 
-There is no first-time owner setup through the website. The retired `/api/rankings/setup` endpoint rejects requests, and old `rankings-admin.json` files are neither read nor changed. The environment variables are the only owner identity. Missing, partial, or invalid owner credentials disable editing while public rankings remain readable when the data store is configured.
-
-Credentials are checked with scrypt and timing-safe comparisons. They are never included in public responses, stored in the ledger, or written to a credentials file. Keep them out of Git and public frontend variables. Owner cookies are HTTP-only, SameSite Strict, restricted to `/api/rankings`, and Secure in production; hosted owner access requires HTTPS.
-
-## Sessions and deployment
-
-An owner session lasts twelve hours. With `RANKINGS_STORAGE=firestore`, hashed session identifiers live in the private `ownerSessions` subcollection beneath the configured rankings document. Sessions work across Vercel function instances and survive cold starts or redeployments when credentials stay the same. Signing out revokes the session across instances. Changing either owner environment variable and redeploying invalidates existing sessions on the new deployment.
-
-Firestore also shares a transactional, account-wide limit of ten sign-in attempts per fifteen minutes. A successful login resets that limit. This limit cannot be bypassed by switching function instances or supplying a different forwarded IP address. Both session expiry and rate-limit windows are enforced by the application; they do not depend on background database cleanup.
-
-File storage is intended for one long-running Node process. Its sessions and login limits live in memory; restarting that process requires signing in again. Credentials still come only from the environment.
-
-The rankings API accepts changes from the same website origin. The included local Vite proxy is supported; a separately hosted frontend calling this API from another origin is not supported.
+The old Vercel `/api/rankings` API returns 410, so previous owner cookies and server environment passwords cannot edit through that route. Existing local Node installations can explicitly use `VITE_RANKINGS_TRANSPORT=http`; only this legacy mode keeps environment-configured owner usernames/passwords and twelve-hour HTTP-only cookies.
 
 ## Persistence and recovery
 
-For Vercel, use **Cloud Firestore** with `RANKINGS_STORAGE=firestore` and `FIREBASE_AUTH_MODE=web`. The server accepts the standard Firebase web config and uses short-lived Google access tokens obtained from Vercel’s deployment identity. No Firebase backend email, password, UID, or service-account JSON is required. Google IAM grants database access; direct browser access remains denied by Firestore Rules. See [Firebase setup and importing existing records](FIRESTORE.md). Legacy Admin-mode deployments remain supported with `FIREBASE_AUTH_MODE=admin`. Ledger metadata and player/game documents persist independently of the application deployment. A database connection or configuration error returns an error; the API never falls back to local files.
+For Vercel, configure the [browser Firebase fields, Authentication, and rules](VERCEL.md). The browser reads and writes the existing Firestore ledger directly. Public ranking records remain accessible to visitors; private multiplayer and session subcollections remain inaccessible. No Vercel IAM grant is needed for rankings.
 
 With `RANKINGS_STORAGE=file`, `CATAN_DATA_DIR/rankings.json` stores all players, recorded games, and the revision number. Writes use atomic file replacement and private file permissions. A persistent disk is necessary to retain file-backed data when a hosted container is replaced. Back up `rankings.json` before moving hosts. It contains no owner credentials.
 
 Rankings do not expire when an online room expires. Vercel online rooms use separate Firestore documents; local Socket.IO rooms use `CATAN_DATA_DIR/rooms.json`. Local pass-and-play stays in browser storage. Enabling Firestore leaves existing JSON files untouched; importing them requires an explicit command.
 
-If two owner tabs edit the same revision, the first save succeeds and the second receives a conflict. Review the latest ledger before applying the other edit. The server validates dates, player references, per-game player counts, and VP fields even when a request bypasses the interface.
+If two owner tabs edit the same revision, the first save succeeds and the second receives a conflict. Review the latest ledger before applying the other edit. The shared client validates dates, player references, per-game player counts, and VP fields before saving and when loading records. Firestore Rules enforce the owner identity, record structure, and atomic revision/index updates.
 
-A corrupt or unreadable saved ledger disables rankings operations and preserves the original data. For a damaged local file, stop the server, back it up, restore a known-good `rankings.json`, and restart. For cloud records, restore from your Firestore backup. To recover owner access without changing games, update `RANKINGS_ADMIN_USERNAME` and `RANKINGS_ADMIN_PASSWORD`, then restart locally or redeploy on Vercel.
+A corrupt or unreadable saved ledger disables rankings operations and preserves the original data. For a damaged local file, stop the server, back it up, restore a known-good `rankings.json`, and restart. For cloud records, restore from your Firestore backup. To recover browser owner access without changing games, reset the Firebase user password through Firebase Authentication. If replacing the owner account, update the UID in the rules. Legacy local HTTP mode still uses its server owner environment variables.
 
 ## Verification
 
-```sh
-npm test
-npm run test:rankings
-```
+`npm test` checks scoring, validation, configuration, client behavior, and server behavior. The browser Firebase emulator suite checks actual Auth, Firestore, owner-only rules, and conflicts without touching the production database. The [Firestore guide](FIRESTORE.md#emulator-verification) describes the test modes.
 
-The rankings command builds the app, runs HTTP integration checks, and runs browser tests using temporary local storage. Checks cover public reading, environment-only owner access, generic login failures, session revocation, origin enforcement, CRUD, persistence, revision conflicts, validation, rate limiting, HTTPS cookies, and preservation of a corrupt ledger. Browser workflows cover player renames, shared read-only access, six-player records, mobile layout, conflict recovery, and retaining a draft after the session expires.
-
-The [Firestore emulator checks](FIRESTORE.md#emulator-verification) additionally verify sessions across separate processes, cold starts, distributed logout and rate limits, credential rotation, and expiration. The web-mode suite verifies the REST transport and denial of direct database access for anonymous clients and unrelated Firebase users. Unit tests cover deployment token exchange; emulators do not simulate Google IAM federation. Tests do not use your real ledger or Firebase credentials.
+`npm run test:rankings` verifies the legacy local HTTP variant and existing desktop/mobile editor workflows. It builds with `VITE_RANKINGS_TRANSPORT=http`; use a normal production build for browser Firebase rankings.
