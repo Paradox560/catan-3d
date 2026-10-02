@@ -33,7 +33,6 @@ describe('environment owner identity', () => {
     { ...environment, RANKINGS_ADMIN_USERNAME: 'o\u0000wner' },
     { ...environment, RANKINGS_ADMIN_USERNAME: 'a'.repeat(129) },
     { ...environment, RANKINGS_ADMIN_PASSWORD: '' },
-    { ...environment, RANKINGS_ADMIN_PASSWORD: 'short' },
     { ...environment, RANKINGS_ADMIN_PASSWORD: 'é'.repeat(513) },
   ])('disables editing for missing or invalid environment credentials (%#)', (env) => {
     expect(ownerCredentials(env)).toBeNull();
@@ -72,6 +71,19 @@ describe('environment owner identity', () => {
     ])
       expect(await matchesOwner(username, password, credentials)).toBe(false);
   });
+  it.each(['x', 'ninechars'])(
+    'accepts a non-empty password without an arbitrary minimum (%#)',
+    async (password) => {
+      const credentials = ownerCredentials({ ...environment, RANKINGS_ADMIN_PASSWORD: password });
+      expect(credentials).not.toBeNull();
+      expect(await matchesOwner(environment.RANKINGS_ADMIN_USERNAME, password, credentials!)).toBe(
+        true,
+      );
+      expect(
+        await matchesOwner(environment.RANKINGS_ADMIN_USERNAME, password + 'wrong', credentials!),
+      ).toBe(false);
+    },
+  );
 });
 
 describe('safe owner configuration diagnostics', () => {
@@ -97,7 +109,6 @@ describe('safe owner configuration diagnostics', () => {
     ],
     [{ ...environment, RANKINGS_ADMIN_PASSWORD: undefined }, 'password-missing'],
     [{ ...environment, RANKINGS_ADMIN_PASSWORD: '' }, 'password-missing'],
-    [{ ...environment, RANKINGS_ADMIN_PASSWORD: 'p'.repeat(9) }, 'password-too-short'],
     [{ ...environment, RANKINGS_ADMIN_PASSWORD: 'p'.repeat(1025) }, 'password-too-long'],
     [{ ...environment, RANKINGS_ADMIN_PASSWORD: 'é'.repeat(513) }, 'password-too-long'],
   ] as const)(
@@ -129,13 +140,15 @@ describe('safe owner configuration diagnostics', () => {
     ).toBe('username-surrounding-whitespace');
   });
   it('logs only one fixed diagnostic at router initialization without values, lengths, or hashes', async () => {
-    vi.stubEnv('RANKINGS_ADMIN_USERNAME', 'sensitive-owner-name');
+    vi.stubEnv('RANKINGS_ADMIN_USERNAME', ' sensitive-owner-name');
     vi.stubEnv('RANKINGS_ADMIN_PASSWORD', 's3cr3t!');
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     const router = rankingsRouter('/unused-owner-diagnostic-test');
     expect(router).toBeDefined();
     await Promise.resolve();
-    expect(logged.mock.calls).toEqual([['Rankings owner access disabled:', 'password-too-short']]);
+    expect(logged.mock.calls).toEqual([
+      ['Rankings owner access disabled:', 'username-surrounding-whitespace'],
+    ]);
     expect(JSON.stringify(logged.mock.calls)).not.toContain('sensitive-owner-name');
     expect(JSON.stringify(logged.mock.calls)).not.toContain('s3cr3t!');
     ownerConfigurationIssue();

@@ -34,7 +34,6 @@ export type OwnerConfigurationIssue =
   | 'username-too-long'
   | 'username-invalid-characters'
   | 'password-missing'
-  | 'password-too-short'
   | 'password-too-long';
 
 /** A fixed diagnostic code only: never include credential values, lengths, or hashes. */
@@ -48,7 +47,6 @@ export function ownerConfigurationIssue(
   if (username.length > 128) return 'username-too-long';
   if (/[\u0000-\u001f\u007f]/.test(username)) return 'username-invalid-characters';
   if (!password) return 'password-missing';
-  if (password.length < 10) return 'password-too-short';
   if (Buffer.byteLength(password, 'utf8') > 1_024) return 'password-too-long';
   return null;
 }

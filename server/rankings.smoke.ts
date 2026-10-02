@@ -13,7 +13,7 @@ const port = 41_000 + Math.floor(Math.random() * 8_000);
 const url = `http://127.0.0.1:${port}`;
 const endpoint = `${url}/api/rankings`;
 const username = 'test-owner-9723';
-const password = 'test-owner-password-9723';
+const password = 'test-pass'; // Nine characters: exact matching has no minimum-length policy.
 const productionPassword = 'test-hosted-owner-password-6472';
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 let server: ChildProcess | null = null;
@@ -118,7 +118,7 @@ try {
     { username: null },
     { password: null },
     { username: '' },
-    { password: 'short' },
+    { password: '' },
   ]) {
     await start(configuration);
     const publicResult = await request();
