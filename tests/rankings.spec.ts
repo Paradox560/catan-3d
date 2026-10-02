@@ -2,13 +2,14 @@ import type { Page } from '@playwright/test';
 import { test, expect } from './rankings-fixture';
 
 const password = 'private-ledger-test-passphrase';
+const username = 'ledger-owner';
 
-async function setupOwner(page: Page, url: string) {
+async function signInOwner(page: Page, url: string) {
   await page.goto(`${url}/#rankings`);
-  await page.getByRole('button', { name: 'Set up owner access' }).click();
-  await page.getByLabel('Choose password', { exact: true }).fill(password);
-  await page.getByLabel('Confirm password', { exact: true }).fill(password);
-  await page.getByRole('button', { name: 'Create owner password' }).click();
+  await page.getByRole('button', { name: 'Owner sign in', exact: true }).click();
+  await page.getByLabel('Owner username', { exact: true }).fill(username);
+  await page.getByLabel('Owner password', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Unlock editing' }).click();
   await expect(page.getByRole('button', { name: 'Lock editing' })).toBeVisible();
 }
 
@@ -47,7 +48,7 @@ test('owner records, edits, renames and deletes games; public visitors only read
 }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await setupOwner(page, rankingsURL);
+  await signInOwner(page, rankingsURL);
   await recordFirstGame(page);
 
   await page.getByRole('button', { name: 'Record game', exact: true }).click();
@@ -109,6 +110,11 @@ test('owner records, edits, renames and deletes games; public visitors only read
   await page.getByRole('button', { name: 'Lock editing' }).click();
   await expect(page.getByRole('button', { name: 'Record game', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Owner sign in', exact: true }).click();
+  await page.getByLabel('Owner username', { exact: true }).fill('wrong-owner');
+  await page.getByLabel('Owner password', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Unlock editing' }).click();
+  await expect(page.getByRole('alert')).toContainText('incorrect');
+  await page.getByLabel('Owner username', { exact: true }).fill(username);
   await page.getByLabel('Owner password', { exact: true }).fill('incorrect-password');
   await page.getByRole('button', { name: 'Unlock editing' }).click();
   await expect(page.getByRole('alert')).toContainText('incorrect');
@@ -123,7 +129,7 @@ test('six-player records and their breakdown work on mobile; navigation returns 
   rankingsURL,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await setupOwner(page, rankingsURL);
+  await signInOwner(page, rankingsURL);
   await page.getByRole('button', { name: 'Record game', exact: true }).first().click();
   for (let index = 1; index <= 6; index++) {
     if (index > 2) await page.getByRole('button', { name: 'Add player', exact: true }).click();
@@ -157,7 +163,7 @@ test('six-player records and their breakdown work on mobile; navigation returns 
 });
 
 test('a conflict or expired session preserves the owner draft', async ({ page, rankingsURL }) => {
-  await setupOwner(page, rankingsURL);
+  await signInOwner(page, rankingsURL);
   await recordFirstGame(page);
   await page.getByRole('button', { name: /Edit game/ }).click();
   await page.getByLabel('Player 1 other victory points', { exact: true }).fill('2');
@@ -197,9 +203,38 @@ test('a conflict or expired session preserves the owner draft', async ({ page, r
   });
   await page.getByRole('button', { name: 'Save game', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Owner sign in', exact: true })).toBeVisible();
+  await page.getByLabel('Owner username', { exact: true }).fill(username);
   await page.getByLabel('Owner password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Unlock editing' }).click();
   await expect(page.getByLabel('Player 1 other victory points', { exact: true })).toHaveValue('3');
   await page.getByRole('button', { name: 'Save game', exact: true }).click();
   await scoreIs(page, 'Ada', 23);
+});
+
+test.describe('owner configuration is controlled by environment variables', () => {
+  test.use({ ownerConfigured: false });
+  test('public ledger stays readable without offering account creation', async ({
+    page,
+    rankingsURL,
+  }) => {
+    await page.goto(`${rankingsURL}/#rankings`);
+    await expect(page.getByRole('heading', { name: 'Rankings of the Realm' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Owner sign in', exact: true })).toBeDisabled();
+    await expect(
+      page.getByText('Owner access has not been configured. The ledger is available to read.'),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Set up owner access' })).toHaveCount(0);
+    const takeover = await page.request.post(`${rankingsURL}/api/rankings/setup`, {
+      headers: { Origin: rankingsURL },
+      data: { username, password },
+    });
+    expect(takeover.status()).toBe(403);
+    const publicLedger = await page.request.get(`${rankingsURL}/api/rankings`);
+    expect(publicLedger.status()).toBe(200);
+    expect((await publicLedger.json()).access).toEqual({
+      configured: false,
+      authenticated: false,
+      canSetup: false,
+    });
+  });
 });

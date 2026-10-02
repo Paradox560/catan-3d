@@ -8,8 +8,9 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-export const test = base.extend<{ rankingsURL: string }>({
-  rankingsURL: async ({}, use) => {
+export const test = base.extend<{ rankingsURL: string; ownerConfigured: boolean }>({
+  ownerConfigured: [true, { option: true }],
+  rankingsURL: async ({ ownerConfigured }, use) => {
     const reservation = createServer();
     await new Promise<void>((resolve, reject) => {
       reservation.once('error', reject);
@@ -21,11 +22,18 @@ export const test = base.extend<{ rankingsURL: string }>({
     const url = `http://127.0.0.1:${port}`;
     const environment = { ...process.env };
     delete environment.RANKINGS_ADMIN_PASSWORD;
+    delete environment.RANKINGS_ADMIN_USERNAME;
     const server = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
       cwd: root,
       env: {
         ...environment,
         RANKINGS_STORAGE: 'file',
+        ...(ownerConfigured
+          ? {
+              RANKINGS_ADMIN_USERNAME: 'ledger-owner',
+              RANKINGS_ADMIN_PASSWORD: 'private-ledger-test-passphrase',
+            }
+          : {}),
         PORT: String(port),
         NODE_ENV: 'test',
         CATAN_DATA_DIR: directory,
