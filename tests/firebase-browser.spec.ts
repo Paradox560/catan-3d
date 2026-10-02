@@ -1,41 +1,35 @@
 import { test, expect } from '@playwright/test';
 import { initializeApp, deleteApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 
 // These fixed demo endpoints never use the project's production Firebase config.
 process.env.METADATA_SERVER_DETECTION = 'none';
-process.env.FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9100';
 process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8182';
 const fixture = initializeApp({ projectId: 'demo-catan-browser' }, 'browser-ui-fixture');
 const database = getFirestore(fixture);
-const accounts = getAuth(fixture);
-const uid = 'catan-browser-owner';
-const email = 'ui-owner@catan.test';
+const username = 'catan-owner';
 const password = 'Owner-browser-fixture-123!';
 test.beforeAll(async () => {
   await database.recursiveDelete(database.doc('catan/rankings'));
-  await accounts.deleteUser(uid).catch(() => {});
-  await accounts.createUser({ uid, email, password });
 });
 test.afterAll(async () => {
   await database.recursiveDelete(database.doc('catan/rankings'));
-  await accounts.deleteUser(uid).catch(() => {});
   await database.terminate();
   await deleteApp(fixture);
 });
-test('browser owner sign-in, shared game records, persistence and logout use Firebase directly', async ({
+test('public Firebase reads and server owner sign-in, game records, persistence and logout', async ({
   page,
   browser,
 }) => {
   const serverRankingsRequests: string[] = [];
   page.on('request', (request) => {
-    if (request.url().includes('/api/rankings')) serverRankingsRequests.push(request.url());
+    if (request.url().includes('/api/rankings'))
+      serverRankingsRequests.push(`${request.method()} ${new URL(request.url()).pathname}`);
   });
   await page.goto('/#rankings');
   await expect(page.getByRole('heading', { name: 'Rankings of the Realm' })).toBeVisible();
   await page.getByRole('button', { name: 'Owner sign in', exact: true }).click();
-  await page.getByLabel('Owner email', { exact: true }).fill(email);
+  await page.getByLabel('Owner username', { exact: true }).fill(username);
   await page.getByLabel('Owner password', { exact: true }).fill('incorrect-password');
   await page.getByRole('button', { name: 'Unlock editing' }).click();
   await expect(page.getByRole('alert')).toContainText('incorrect');
@@ -99,5 +93,9 @@ test('browser owner sign-in, shared game records, persistence and logout use Fir
   await expect(page.getByRole('button', { name: 'Record game', exact: true })).toHaveCount(0);
   await page.reload();
   await expect(page.getByRole('button', { name: 'Owner sign in', exact: true })).toBeVisible();
-  expect(serverRankingsRequests).toEqual([]);
+  expect(serverRankingsRequests).toContain('GET /api/rankings/access');
+  expect(serverRankingsRequests).toContain('POST /api/rankings/login');
+  expect(serverRankingsRequests).toContain('PUT /api/rankings');
+  expect(serverRankingsRequests).toContain('POST /api/rankings/logout');
+  expect(serverRankingsRequests).not.toContain('GET /api/rankings');
 });

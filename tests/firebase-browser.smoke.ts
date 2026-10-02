@@ -1,27 +1,34 @@
 import assert from 'node:assert/strict';
+import express from 'express';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import {
   deleteApp as deleteAdminApp,
+  getApps,
   initializeApp as initializeAdminApp,
 } from 'firebase-admin/app';
-import { getAuth as getAdminAuth } from 'firebase-admin/auth';
-import { Firestore as AdminFirestore } from 'firebase-admin/firestore';
+import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import { deleteApp, initializeApp, type FirebaseApp } from 'firebase/app';
-import { connectAuthEmulator, getAuth, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import {
   collection,
   connectFirestoreEmulator,
-  deleteDoc,
   doc,
   getDocFromServer,
   getDocsFromServer,
   getFirestore,
-  setLogLevel,
   setDoc,
+  deleteDoc,
+  setLogLevel,
   terminate,
-  writeBatch,
   type Firestore,
 } from 'firebase/firestore';
-import { createFirebaseRankingsClient } from '../src/rankings/firebase-client.js';
+import { rankingsRouter } from '../server/rankings.js';
+import {
+  createFirebaseRankingsClient,
+  type RankingsOwnerClient,
+} from '../src/rankings/firebase-client.js';
+import { RankingsError, type RankingsAccess, type RankingsReply } from '../src/rankings/types.js';
 import {
   buildStandings,
   emptyBreakdown,
@@ -29,58 +36,82 @@ import {
   type RankingsData,
 } from '../src/rankings/model.js';
 
-// These tests only address two fixed loopback emulators and a demo project. They
-// never consume local .env files, real Firebase credentials or production data.
-const projectId = 'demo-catan-browser';
-for (const [key, expected] of Object.entries({
-  FIRESTORE_EMULATOR_HOST: '127.0.0.1:8182',
-  FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9100',
-})) {
-  assert.ok(process.env[key] === undefined || process.env[key] === expected, `Unexpected ${key}.`);
-  process.env[key] = expected;
-}
-const owner = {
-  uid: 'catan-browser-owner',
-  email: 'owner@catan.test',
-  password: 'Owner-emulator-123!',
-};
-const outsider = {
-  uid: 'catan-browser-outsider',
-  email: 'outsider@catan.test',
-  password: 'Outsider-emulator-123!',
-};
-const adminApp = initializeAdminApp(
-  {
-    projectId,
-    credential: { getAccessToken: async () => ({ access_token: 'owner', expires_in: 3600 }) },
-  },
-  'catan-browser-smoke-admin',
+// Fixed demo-only fixture: never loads .env, uses cloud credentials, or publishes rules.
+assert.ok(
+  !process.env.FIRESTORE_EMULATOR_HOST || process.env.FIRESTORE_EMULATOR_HOST === '127.0.0.1:8182',
 );
-const admin = new AdminFirestore({ projectId, host: '127.0.0.1:8182', ssl: false });
-const adminAuth = getAdminAuth(adminApp);
-const root = admin.doc('catan/rankings');
-const apps: Array<{ app: FirebaseApp; db: Firestore }> = [];
-// Expected denial checks are asserted below; suppress repetitive SDK transport logs.
+Object.assign(process.env, {
+  METADATA_SERVER_DETECTION: 'none',
+  NODE_ENV: 'test',
+  RANKINGS_STORAGE: 'firestore',
+  FIREBASE_AUTH_MODE: 'admin',
+  FIREBASE_PROJECT_ID: 'demo-catan-browser',
+  FIRESTORE_RANKINGS_DOCUMENT: 'catan/rankings',
+  FIRESTORE_EMULATOR_HOST: '127.0.0.1:8182',
+  RANKINGS_ADMIN_USERNAME: 'catan-owner',
+  RANKINGS_ADMIN_PASSWORD: 'Owner-emulator-123!',
+});
+delete process.env.VERCEL;
+delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 setLogLevel('silent');
-
-function browser(name: string) {
+const projectId = 'demo-catan-browser';
+const adminApp = initializeAdminApp({ projectId }, 'catan-hybrid-smoke-admin');
+const admin = getAdminFirestore(adminApp);
+const root = admin.doc('catan/rankings');
+const directory = await mkdtemp(path.join(tmpdir(), 'catan-hybrid-smoke-'));
+const app = express();
+app.use('/api/rankings', rankingsRouter(directory));
+const server = await new Promise<ReturnType<typeof app.listen>>((resolve) => {
+  const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+});
+const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+const apps: Array<{ app: FirebaseApp; db: Firestore }> = [];
+const requests: string[] = [];
+function ownerAPI() {
+  let cookie = '';
+  async function request<T>(suffix = '', method = 'GET', body?: unknown): Promise<T> {
+    requests.push(`${method} /api/rankings${suffix}`);
+    const response = await fetch(`${origin}/api/rankings${suffix}`, {
+      method,
+      headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const issued = response.headers.get('set-cookie');
+    if (issued) {
+      assert.match(issued, /HttpOnly/i);
+      assert.match(issued, /SameSite=Strict/i);
+      cookie = issued.split(';')[0];
+    }
+    const payload = await response.json();
+    if (!response.ok) throw new RankingsError(payload.error, response.status);
+    return payload as T;
+  }
+  const api: RankingsOwnerClient = {
+    loadRankingsAccess: async () => (await request<{ access: RankingsAccess }>('/access')).access,
+    loginRankings: (username, password) =>
+      request<RankingsReply>('/login', 'POST', { username, password }),
+    logoutRankings: () => request<RankingsReply>('/logout', 'POST', {}),
+    saveRankings: (data) => request<RankingsReply>('', 'PUT', data),
+  };
+  return { api, request };
+}
+function browser(name: string, owner = ownerAPI()) {
   const app = initializeApp(
     {
       apiKey: 'demo-browser-api-key',
       authDomain: `${projectId}.firebaseapp.com`,
       projectId,
-      appId: '1:123456789:web:browser',
+      appId: '1:123456789:web:abcdef',
     },
     name,
   );
-  const auth = getAuth(app);
-  connectAuthEmulator(auth, 'http://127.0.0.1:9100', { disableWarnings: true });
   const db = getFirestore(app);
   connectFirestoreEmulator(db, '127.0.0.1', 8182);
   apps.push({ app, db });
-  return { db, auth, api: createFirebaseRankingsClient({ db, auth }) };
+  return { db, owner, api: createFirebaseRankingsClient({ db }, owner.api) };
 }
-
 function metadata(data: RankingsData) {
   return {
     schema: 'catan-rankings-v1',
@@ -90,37 +121,22 @@ function metadata(data: RankingsData) {
     gameIds: data.games.map((g) => g.id),
   };
 }
-
 async function denied(operation: Promise<unknown>, label: string) {
   await assert.rejects(
     operation,
-    (error: unknown) => {
-      assert.equal((error as { code?: string }).code, 'permission-denied', label);
-      return true;
-    },
+    (error: unknown) => (error as { code?: string }).code === 'permission-denied',
     label,
   );
 }
-
-async function rejectedStatus(operation: Promise<unknown>, status: number, label: string) {
+async function status(operation: Promise<unknown>, expected: number, label: string) {
   await assert.rejects(
     operation,
-    (error: unknown) => {
-      assert.equal((error as { status?: number }).status, status, label);
-      return true;
-    },
+    (error: unknown) => (error as { status?: number }).status === expected,
     label,
   );
 }
-
 try {
   await admin.recursiveDelete(root);
-  for (const account of [owner, outsider]) {
-    await adminAuth.deleteUser(account.uid).catch((error: { code?: string }) => {
-      if (error.code !== 'auth/user-not-found') throw error;
-    });
-    await adminAuth.createUser(account);
-  }
   const existing: RankingsData = {
     version: 1,
     revision: 7,
@@ -147,9 +163,8 @@ try {
     ],
   };
   const seed = admin.batch().set(root, metadata(existing));
-  for (const player of existing.players)
-    seed.set(root.collection('players').doc(player.id), player);
-  for (const game of existing.games) seed.set(root.collection('games').doc(game.id), game);
+  for (const p of existing.players) seed.set(root.collection('players').doc(p.id), p);
+  for (const g of existing.games) seed.set(root.collection('games').doc(g.id), g);
   const privatePaths = [
     'catan/rankings/onlineRooms/private-room',
     'catan/rankings/onlineLimits/private-limit',
@@ -159,104 +174,88 @@ try {
     'catan/other-ledger',
     'inventory/browser-smoke',
   ];
-  for (const path of privatePaths) seed.set(admin.doc(path), { private: 'sentinel' });
+  for (const target of privatePaths) seed.set(admin.doc(target), { private: 'sentinel' });
   await seed.commit();
-
-  const anonymous = browser('catan-anonymous');
-  const ownerTab = browser('catan-owner');
-  const outsiderTab = browser('catan-outsider');
-  const publicReply = await anonymous.api.loadRankings();
-  assert.deepEqual(publicReply.data, existing);
-  assert.equal(publicReply.access.authenticated, false);
-  await denied(
-    getDocFromServer(doc(anonymous.db, 'catan/rankings/access/owner')),
-    'anonymous owner gate',
+  const anonymous = browser('catan-public-smoke');
+  const owner = browser('catan-owner-smoke');
+  assert.deepEqual((await anonymous.api.loadRankings()).data, existing);
+  assert.equal((await anonymous.api.readAccess()).authenticated, false);
+  await status(anonymous.api.saveRankings(existing), 401, 'anonymous API save');
+  await status(
+    owner.api.loginRankings('catan-owner', 'wrong-password'),
+    401,
+    'wrong owner password',
   );
   await denied(
     setDoc(doc(anonymous.db, 'catan/rankings'), metadata({ ...existing, revision: 8 })),
-    'anonymous metadata write',
+    'anonymous direct metadata write',
   );
   await denied(
     setDoc(doc(anonymous.db, 'catan/rankings/players/legacy-a'), {
       id: 'legacy-a',
       name: 'Intruder',
     }),
-    'anonymous child write',
+    'anonymous direct player write',
   );
-  console.log('PASS anonymous public reads and denied edits');
+  console.log('PASS public SDK reads, denied browser writes, protected owner API');
 
-  await signInWithEmailAndPassword(outsiderTab.auth, outsider.email, outsider.password);
-  assert.deepEqual((await outsiderTab.api.loadRankings()).data, existing);
-  assert.equal((await outsiderTab.api.loadRankings()).access.authenticated, false);
-  await denied(
-    getDocFromServer(doc(outsiderTab.db, 'catan/rankings/access/owner')),
-    'outsider gate',
-  );
-  await denied(
-    setDoc(doc(outsiderTab.db, 'catan/rankings'), metadata({ ...existing, revision: 8 })),
-    'outsider metadata write',
-  );
-  await signOut(outsiderTab.auth);
-  await rejectedStatus(
-    outsiderTab.api.loginRankings(outsider.email, outsider.password),
-    401,
-    'outsider owner login',
-  );
-  console.log('PASS Firebase authentication alone does not grant owner access');
-
-  const login = await ownerTab.api.loginRankings(owner.email, owner.password);
+  const login = await owner.api.loginRankings('catan-owner', 'Owner-emulator-123!');
   assert.equal(login.access.authenticated, true);
   assert.deepEqual(login.data, existing);
-  assert.equal(
-    (await getDocFromServer(doc(ownerTab.db, 'catan/rankings/access/owner'))).exists(),
-    false,
-  );
-  assert.equal((await root.collection('access').doc('owner').get()).exists, false);
   await denied(
-    setDoc(doc(ownerTab.db, 'catan/rankings/access/owner'), { uid: owner.uid }),
-    'owner cannot change gate',
+    getDocFromServer(doc(owner.db, 'catan/rankings/access/owner')),
+    'no Firebase owner UID gate',
   );
-  console.log('PASS owner UID gate works without an access document');
+  await denied(
+    setDoc(doc(owner.db, 'catan/rankings/players/legacy-a'), {
+      id: 'legacy-a',
+      name: 'Direct owner write',
+    }),
+    'HTTP owner still cannot write directly to Firebase',
+  );
+  await denied(
+    deleteDoc(doc(owner.db, 'catan/rankings/games/legacy-game')),
+    'direct owner deletion',
+  );
+  console.log(
+    'PASS environment username/password and HTTP-only session; Firebase remains read-only',
+  );
 
-  const fullPlayers = Array.from({ length: 6 }, (_, index) => ({
-    id: `six-${index}`,
-    name: `Player ${index + 1}`,
+  const players = Array.from({ length: 6 }, (_, i) => ({
+    id: `six-${i}`,
+    name: `Player ${i + 1}`,
   }));
-  const fullGame = {
-    id: 'six-player-game',
+  const game = {
+    id: 'six-game',
     date: '2026-10-02',
-    notes: 'Six players, every VP category.',
-    results: fullPlayers.map((player, index) => ({
-      playerId: player.id,
+    notes: 'Every VP category',
+    results: players.map((p, i) => ({
+      playerId: p.id,
       breakdown: {
-        settlements: index % 5,
-        cities: index % 4,
-        victoryCards: index % 6,
-        longestRoad: index === 0,
-        largestArmy: index === 1,
-        other: index,
+        settlements: i % 5,
+        cities: i % 4,
+        victoryCards: i % 6,
+        longestRoad: i === 0,
+        largestArmy: i === 1,
+        other: i,
       },
     })),
   };
   let saved = (
-    await ownerTab.api.saveRankings({
+    await owner.api.saveRankings({
       ...existing,
-      players: [...existing.players, ...fullPlayers],
-      games: [...existing.games, fullGame],
+      players: [...existing.players, ...players],
+      games: [...existing.games, game],
     })
   ).data;
   assert.equal(saved.revision, 8);
   assert.deepEqual((await anonymous.api.loadRankings()).data, saved);
   assert.deepEqual(saved.games[0], existing.games[0]);
-  assert.equal(
-    buildStandings(saved).find((standing) => standing.player.id === 'six-5')?.totalVP,
-    12,
-  );
-
+  assert.equal(buildStandings(saved).find((s) => s.player.id === 'six-5')?.totalVP, 12);
   const changed = structuredClone(saved);
-  changed.players.find((player) => player.id === 'six-0')!.name = 'Renamed owner entry';
-  changed.games.find((game) => game.id === fullGame.id)!.date = '2026-10-03';
-  changed.games.find((game) => game.id === fullGame.id)!.results[0].breakdown = {
+  changed.players[2].name = 'Renamed player';
+  changed.games[1].date = '2026-10-03';
+  changed.games[1].results[0].breakdown = {
     settlements: 5,
     cities: 4,
     victoryCards: 6,
@@ -264,177 +263,86 @@ try {
     largestArmy: true,
     other: 50,
   };
-  saved = (await ownerTab.api.saveRankings(changed)).data;
+  saved = (await owner.api.saveRankings(changed)).data;
   assert.equal(saved.revision, 9);
-  assert.deepEqual((await anonymous.api.loadRankings()).data, saved);
+  const reloaded = browser('catan-reloaded-smoke', owner.owner);
+  assert.deepEqual((await reloaded.api.loadRankings()).data, saved);
+  assert.equal((await reloaded.api.readAccess()).authenticated, true);
   console.log(
-    'PASS existing data retained; six-player games and every VP category create/read/update',
+    'PASS server six-player/full VP create/update and public persistence; existing records retained',
   );
 
-  // Independent SDK clients race from one revision. Exactly one succeeds.
-  const secondOwner = browser('catan-second-owner');
-  await secondOwner.api.loginRankings(owner.email, owner.password);
-  assert.equal(ownerTab.auth.currentUser?.uid, owner.uid, 'first owner keeps its Firebase session');
+  const second = browser('catan-second-owner-smoke');
+  await second.api.loginRankings('catan-owner', 'Owner-emulator-123!');
+  const a = structuredClone(saved),
+    b = structuredClone(saved);
+  a.players[0].name = 'Concurrent A';
+  b.players[0].name = 'Concurrent B';
+  const raced = await Promise.allSettled([owner.api.saveRankings(a), second.api.saveRankings(b)]);
+  assert.equal(raced.filter((r) => r.status === 'fulfilled').length, 1);
   assert.equal(
-    secondOwner.auth.currentUser?.uid,
-    owner.uid,
-    'second owner has its Firebase session',
+    (raced.find((r) => r.status === 'rejected') as PromiseRejectedResult).reason.status,
+    409,
   );
-  assert.equal(
-    (await ownerTab.api.readAccess()).authenticated,
-    true,
-    'first owner access before race',
-  );
-  assert.equal(
-    (await secondOwner.api.readAccess()).authenticated,
-    true,
-    'second owner access before race',
-  );
-  const candidateA = structuredClone(saved);
-  const candidateB = structuredClone(saved);
-  candidateA.players[0].name = 'Concurrent winner A';
-  candidateB.players[0].name = 'Concurrent winner B';
-  const raced = await Promise.allSettled([
-    ownerTab.api.saveRankings(candidateA),
-    secondOwner.api.saveRankings(candidateB),
-  ]);
-  assert.equal(raced.filter((result) => result.status === 'fulfilled').length, 1);
-  const loser = raced.find((result) => result.status === 'rejected') as PromiseRejectedResult;
-  assert.equal(loser.reason.status, 409, loser.reason.message);
-  saved = (await ownerTab.api.loadRankings()).data;
-  assert.equal(saved.revision, 10);
-  await rejectedStatus(ownerTab.api.saveRankings(changed), 409, 'stale revision');
-  console.log('PASS concurrent and stale revision saves cannot overwrite each other');
-
-  await denied(
-    setDoc(doc(ownerTab.db, 'catan/rankings/players/legacy-a'), {
-      id: 'legacy-a',
-      name: 'Unversioned',
-    }),
-    'child requires atomic revision',
-  );
-  await denied(
-    deleteDoc(doc(ownerTab.db, 'catan/rankings')),
-    'owner cannot delete ledger metadata',
-  );
-  await denied(
-    setDoc(doc(ownerTab.db, 'catan/rankings'), metadata(saved)),
-    'metadata requires increment',
-  );
-  const stray = writeBatch(ownerTab.db);
-  stray.set(
-    doc(ownerTab.db, 'catan/rankings'),
-    metadata({ ...saved, revision: saved.revision + 1 }),
-  );
-  stray.set(doc(ownerTab.db, 'catan/rankings/players/stray'), { id: 'stray', name: 'Not indexed' });
-  await denied(stray.commit(), 'child must appear in metadata index');
-  const stillIndexed = writeBatch(ownerTab.db);
-  stillIndexed.set(
-    doc(ownerTab.db, 'catan/rankings'),
-    metadata({ ...saved, revision: saved.revision + 1 }),
-  );
-  stillIndexed.delete(doc(ownerTab.db, 'catan/rankings/players/legacy-a'));
-  await denied(stillIndexed.commit(), 'deleted child must leave metadata index');
-  const malformed = writeBatch(ownerTab.db);
-  malformed.set(
-    doc(ownerTab.db, 'catan/rankings'),
-    metadata({ ...saved, revision: saved.revision + 1 }),
-  );
-  malformed.set(doc(ownerTab.db, `catan/rankings/games/${fullGame.id}`), {
-    ...fullGame,
-    results: [],
-  });
-  await denied(malformed.commit(), 'game result list shape rejected by rules');
-  const invalidPoints = structuredClone(saved);
-  invalidPoints.games[0].results[0].breakdown.cities = 99;
-  await rejectedStatus(
-    ownerTab.api.saveRankings(invalidPoints),
+  saved = (await owner.api.loadRankings()).data;
+  await status(owner.api.saveRankings(changed), 409, 'stale edit');
+  const invalid = structuredClone(saved);
+  invalid.games[0].results[0].breakdown.cities = 99;
+  await status(
+    owner.owner.request('', 'PUT', invalid),
     400,
-    'client validates complete VP bounds',
+    'server validates VP bounds independently',
   );
-  assert.deepEqual((await ownerTab.api.loadRankings()).data, saved);
-  console.log(
-    'PASS rules enforce atomic revision/indexes/basic shape; client enforces complete VP bounds',
-  );
+  assert.deepEqual((await anonymous.api.loadRankings()).data, saved);
+  console.log('PASS atomic conflict checks and server validation');
 
-  await signInWithEmailAndPassword(outsiderTab.auth, outsider.email, outsider.password);
-  for (const browserClient of [anonymous, outsiderTab, ownerTab]) {
-    for (const path of privatePaths) {
-      await denied(getDocFromServer(doc(browserClient.db, path)), `private read ${path}`);
+  for (const client of [anonymous, owner]) {
+    for (const target of privatePaths) {
+      await denied(getDocFromServer(doc(client.db, target)), `private read ${target}`);
       await denied(
-        setDoc(doc(browserClient.db, path), { private: 'overwritten' }),
-        `private write ${path}`,
+        setDoc(doc(client.db, target), { private: 'changed' }),
+        `private write ${target}`,
       );
     }
     await denied(
-      getDocsFromServer(collection(browserClient.db, 'catan/rankings/onlineRooms')),
-      'private room list',
+      getDocsFromServer(collection(client.db, 'catan/rankings/onlineRooms')),
+      'private room listing',
     );
     await denied(
-      getDocsFromServer(collection(browserClient.db, 'catan')),
-      'ledger collection list',
+      getDocsFromServer(collection(client.db, 'catan')),
+      'whole Catan collection listing',
     );
   }
-  for (const path of privatePaths)
-    assert.deepEqual((await admin.doc(path).get()).data(), { private: 'sentinel' });
-  console.log(
-    'PASS private online rooms, sessions, limits and other application records stay inaccessible',
-  );
+  for (const target of privatePaths)
+    assert.deepEqual((await admin.doc(target).get()).data(), { private: 'sentinel' });
+  console.log('PASS private rooms, sessions, limits and unrelated records stay inaccessible');
 
   saved = (
-    await ownerTab.api.saveRankings({
+    await owner.api.saveRankings({
       ...saved,
-      players: saved.players.filter((player) => !player.id.startsWith('six-')),
-      games: saved.games.filter((game) => game.id !== fullGame.id),
+      players: saved.players.filter((p) => !p.id.startsWith('six-')),
+      games: saved.games.filter((g) => g.id !== 'six-game'),
     })
   ).data;
-  assert.equal(saved.games.length, 1);
   assert.equal(saved.players.length, 2);
-  assert.equal((await root.collection('games').doc(fullGame.id).get()).exists, false);
-  assert.equal((await root.collection('players').doc('six-0').get()).exists, false);
+  assert.equal(saved.games.length, 1);
+  assert.equal((await root.collection('games').doc('six-game').get()).exists, false);
   assert.deepEqual((await anonymous.api.loadRankings()).data, saved);
-  await ownerTab.api.logoutRankings();
-  assert.equal((await ownerTab.api.loadRankings()).access.authenticated, false);
-  await denied(
-    getDocFromServer(doc(ownerTab.db, 'catan/rankings/access/owner')),
-    'signed out owner gate',
-  );
-  console.log('PASS atomic game/player deletion and logout');
+  await owner.api.logoutRankings();
+  assert.equal((await owner.api.readAccess()).authenticated, false);
+  await status(owner.api.saveRankings(saved), 401, 'revoked session cannot save');
+  console.log('PASS atomic deletion and server logout revocation');
 
-  // An unused ledger can be initialized through the same rules. No access
-  // document, backend, service account or administrative SDK runs in the client.
   await admin.recursiveDelete(root);
-  await ownerTab.api.loginRankings(owner.email, owner.password);
   assert.deepEqual((await anonymous.api.loadRankings()).data, emptyRankings());
-  const first = (await ownerTab.api.saveRankings({ ...existing, revision: 0 })).data;
+  await owner.api.loginRankings('catan-owner', 'Owner-emulator-123!');
+  const first = (await owner.api.saveRankings({ ...existing, revision: 0 })).data;
   assert.equal(first.revision, 1);
   assert.deepEqual((await anonymous.api.loadRankings()).data, first);
-  console.log('PASS empty ledger initialization');
-  const maximumUpdate = structuredClone(first);
-  maximumUpdate.players.push(
-    ...Array.from({ length: 400 }, (_, index) => ({
-      id: `bulk-player-${index}`,
-      name: `Bulk player ${index}`,
-    })),
-  );
-  maximumUpdate.games.push(
-    ...Array.from({ length: 49 }, (_, index) => ({
-      id: `bulk-game-${index}`,
-      date: '2026-10-02',
-      notes: 'Rules request budget verification.',
-      results: maximumUpdate.players.slice(0, 6).map((player) => ({
-        playerId: player.id,
-        breakdown: { ...emptyBreakdown(), cities: 4, settlements: 5 },
-      })),
-    })),
-  );
-  const bulk = (await ownerTab.api.saveRankings(maximumUpdate)).data;
-  assert.equal(bulk.revision, 2);
-  assert.equal(bulk.players.length, 402);
-  assert.equal(bulk.games.length, 50);
-  assert.deepEqual((await anonymous.api.loadRankings()).data, bulk);
-  console.log('PASS maximum 449 changed records plus metadata fits Security Rules request budgets');
-  console.log('Firebase browser SDK and production-template Security Rules smoke passed.');
+  assert.ok(requests.includes('GET /api/rankings/access'));
+  assert.ok(!requests.includes('GET /api/rankings'), 'public ledger reads never use HTTP API');
+  console.log('PASS empty ledger initialized by server; public reads stay on Firebase SDK');
+  console.log('Hybrid public Firebase + server-owner smoke passed.');
 } finally {
   await Promise.all(
     apps.map(async ({ app, db }) => {
@@ -442,12 +350,13 @@ try {
       await deleteApp(app);
     }),
   );
+  await new Promise<void>((resolve) => server.close(() => resolve()));
   await admin.recursiveDelete(root);
   await admin.doc('catan/other-ledger').delete();
   await admin.doc('inventory/browser-smoke').delete();
-  await Promise.all(
-    [owner, outsider].map((account) => adminAuth.deleteUser(account.uid).catch(() => {})),
-  );
-  await admin.terminate();
-  await deleteAdminApp(adminApp);
+  for (const app of getApps()) {
+    await getAdminFirestore(app).terminate();
+    await deleteAdminApp(app);
+  }
+  await rm(directory, { recursive: true, force: true });
 }
