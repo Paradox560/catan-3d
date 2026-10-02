@@ -46,9 +46,17 @@ Open [localhost:3001](http://localhost:3001). The server serves `dist/` and Sock
 
 The room code admits new players to an unstarted lobby. A separate, private reconnect token saves your seat in your browser. After a refresh, choose **Rejoin online table**. Network interruptions reconnect automatically while the application remains open. Using the same saved seat in another tab transfers control to that tab.
 
-Each player should use their own device or browser profile. Clearing site data, changing browsers, or losing the reconnect token loses access to that seat. There are no accounts, passwords, email recovery, bots, spectators, seat replacement, or host kick controls. A disconnected player's seat remains reserved; play waits when their action is required. Rooms with no activity for 72 hours can expire; active connected rooms are not removed by the running server's cleanup task.
+Each player should use their own device or browser profile. Clearing site data, changing browsers, or losing the reconnect token loses access to that seat. Online seats do not have accounts, passwords, email recovery, bots, spectators, seat replacement, or host kick controls. A disconnected player's seat remains reserved; play waits when their action is required. Rooms with no activity for 72 hours can expire; active connected rooms are not removed by the running server's cleanup task.
 
 Local play saves automatically in browser storage and hides the next player's hand behind a pass-screen prompt. It is intended for people sharing one device: all local state exists in that browser and is not protected from someone inspecting developer tools or browser storage.
+
+## Shared rankings
+
+Choose **Rankings** in the game header, or open `/#rankings`. Everyone can read the leaderboard and game chronicle. Players rank by **total victory points** across recorded games; equal totals share a rank.
+
+On localhost, choose **Set up owner access** and create your private password. The owner can add or rename players and record, edit, or delete games with a date, two to six players, notes, and each player's VP breakdown. Totals calculate from settlements, cities, victory point cards, Longest Road, Largest Army, and optional other VP. Records are manual, so tabletop games can be included too.
+
+For a public deployment, set the private `RANKINGS_ADMIN_PASSWORD` environment secret and use HTTPS with persistent storage. Share the rankings URL with friends; keep the owner password private. Rankings are stored on the server and survive room expiry. See [owner setup, persistence, and recovery](docs/RANKINGS.md).
 
 ## Board controls
 
@@ -125,12 +133,13 @@ The container runs as the `node` user. Bind-mounted directories must be writable
 
 ## Configuration and saved games
 
-| Variable          | Default                    | Purpose                                                                                      |
-| ----------------- | -------------------------- | -------------------------------------------------------------------------------------------- |
-| `PORT`            | `3001`                     | HTTP and Socket.IO listening port; binds on all interfaces                                   |
-| `NODE_ENV`        | Unset                      | Use `production` on public deployments                                                       |
-| `CATAN_DATA_DIR`  | `<repository>/server/data` | Writable directory containing `rooms.json`                                                   |
-| `ALLOWED_ORIGINS` | Empty                      | Extra exact browser origins accepted by the socket server; same-origin requests already work |
+| Variable                  | Default                    | Purpose                                                                                      |
+| ------------------------- | -------------------------- | -------------------------------------------------------------------------------------------- |
+| `PORT`                    | `3001`                     | HTTP and Socket.IO listening port; binds on all interfaces                                   |
+| `NODE_ENV`                | Unset                      | Use `production` on public deployments                                                       |
+| `CATAN_DATA_DIR`          | `<repository>/server/data` | Writable directory containing room saves, rankings, and local owner credentials              |
+| `ALLOWED_ORIGINS`         | Empty                      | Extra exact browser origins accepted by the socket server; same-origin requests already work |
+| `RANKINGS_ADMIN_PASSWORD` | Unset                      | Private owner password for rankings; at least ten characters; configure as a hosting secret  |
 
 `.env.example` documents these values. The server does **not** load a `.env` file automatically. Either set environment variables in the hosting dashboard/shell, or use Node's environment-file support after copying the example to `.env`:
 
@@ -151,12 +160,15 @@ Seat tokens are bearer credentials stored in browser local storage. Share room i
 ```sh
 npm test
 npm run test:server
+npm run test:rankings
 npm run build
 npx playwright install chromium
 npm run test:e2e
 ```
 
 The browser suite checks local save/resume, four- and six-player online room setup, turn ownership, paired turns, reconnecting, and the mobile interface. The engine suite includes full matches through a 10-point win in both modes.
+
+The rankings suite builds the app, checks the owner API, and runs isolated browser tests for public reading, recording/editing/deleting games, renaming players, six-player records, mobile layout, session expiry, and concurrent edits. It uses temporary storage and does not change your real ledger.
 
 The engine suite checks board generation and rule behavior. The server integration runner starts a temporary real Socket.IO server and checks standard/extension rooms, setup, hidden hands, turn ownership, consent-only trades, origin rejection, hashed reconnect tokens, single-seat control, and recovery after a process restart. It uses temporary storage and removes it afterward. A sandbox must permit listening on a local TCP port to run this test.
 
@@ -186,8 +198,13 @@ src/game/board.ts           Hex topology, balanced token placement, harbors
 src/game/engine.ts          Pure authoritative rules and state transitions
 src/game/types.ts           Shared game types
 src/network.ts              Typed Socket.IO client and saved seat handling
+src/components/RankingsPage.tsx  Public leaderboard, game records, and owner editing
+src/rankings/               VP model, standings, validation, and API client
+src/rankings.css            Medieval rankings layout and responsive dialogs
 server/index.ts             Rooms, authentication, privacy, persistence, hosting
+server/rankings.ts          Persistent ledger, owner authentication, and rankings API
 server/smoke.ts             Real multiplayer integration tests
+server/rankings.smoke.ts    Isolated rankings HTTP integration tests
 Dockerfile                 Production image
 render.yaml                Optional deployment Blueprint
 ```
