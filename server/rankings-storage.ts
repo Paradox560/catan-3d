@@ -9,7 +9,13 @@ export async function createRankingsServices(directory: string): Promise<{
   store: RankingsStore;
   ownerAuth: OwnerAuthStore;
 }> {
-  const storage = process.env.RANKINGS_STORAGE ?? 'file';
+  const storage =
+    process.env.RANKINGS_STORAGE ?? (process.env.VERCEL === '1' ? 'firestore' : 'file');
+  if (process.env.VERCEL === '1' && storage === 'file') {
+    throw new RankingsStorageError(
+      'Vercel requires Firestore storage. Remove RANKINGS_STORAGE=file and redeploy.',
+    );
+  }
   if (storage === 'file')
     return { store: new FileRankingsStore(directory), ownerAuth: new MemoryOwnerAuthStore() };
   if (storage !== 'firestore') {

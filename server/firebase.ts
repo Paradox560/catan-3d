@@ -60,9 +60,6 @@ export function createRankingsFirestore(env: NodeJS.ProcessEnv = process.env): R
     'FIREBASE_API_KEY',
     'FIREBASE_AUTH_DOMAIN',
     'FIREBASE_APP_ID',
-    'FIREBASE_BACKEND_EMAIL',
-    'FIREBASE_BACKEND_PASSWORD',
-    'FIREBASE_BACKEND_UID',
   ].some((key) => env[key] !== undefined);
   const mode = env.FIREBASE_AUTH_MODE ?? (webSelected ? 'web' : 'admin');
   if (mode !== 'web' && mode !== 'admin')
@@ -73,7 +70,7 @@ export function createRankingsFirestore(env: NodeJS.ProcessEnv = process.env): R
       env.GOOGLE_APPLICATION_CREDENTIALS !== undefined)
   )
     throw new Error(
-      'Web config uses Firebase Authentication. Remove service-account JSON and key-file variables when FIREBASE_AUTH_MODE=web.',
+      'Web config uses the Vercel deployment identity. Remove service-account JSON and key-file variables when FIREBASE_AUTH_MODE=web.',
     );
   const projectId =
     mode === 'web' ? parseWebAuthConfig(env).options.projectId : env.FIREBASE_PROJECT_ID?.trim();
@@ -81,7 +78,9 @@ export function createRankingsFirestore(env: NodeJS.ProcessEnv = process.env): R
     throw new Error('Set FIREBASE_PROJECT_ID to the Firebase project ID before using Firestore.');
   }
 
-  const documentPath = env.FIRESTORE_RANKINGS_DOCUMENT?.trim();
+  const documentPath = (
+    env.FIRESTORE_RANKINGS_DOCUMENT ?? (mode === 'web' ? 'catan/rankings' : undefined)
+  )?.trim();
   const segments = documentPath?.split('/') ?? [];
   if (
     !documentPath ||

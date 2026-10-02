@@ -13,7 +13,7 @@ app.get('/api/health', (_req, res) => {
 });
 app.use('/api', (_req, res, next) => {
   res.set('Cache-Control', 'no-store');
-  if (process.env.RANKINGS_STORAGE !== 'firestore') {
+  if (process.env.RANKINGS_STORAGE !== undefined && process.env.RANKINGS_STORAGE !== 'firestore') {
     return void res.status(503).json({
       error:
         'Cloud storage is not configured. Set the required Firestore environment variables and redeploy.',
