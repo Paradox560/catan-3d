@@ -1,4 +1,5 @@
 import { io, type Socket } from 'socket.io-client';
+import { HttpCatanConnection } from './network-http';
 import type { GameAction, GameState, Resources } from './game/types';
 
 export interface Session {
@@ -20,6 +21,7 @@ export interface PendingTrade {
   expiresAt: number;
 }
 export interface RoomSnapshot {
+  revision?: number;
   code: string;
   mode: 'standard' | 'extension';
   capacity: number;
@@ -41,7 +43,7 @@ export interface CreateRoom {
   mode: 'standard' | 'extension';
   capacity: number;
 }
-const SESSION_KEY = 'catan-online-session-v1';
+export const SESSION_KEY = 'catan-online-session-v1';
 export function loadSession(): Session | null {
   try {
     const session = JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null');
@@ -59,7 +61,7 @@ export function clearSession(): void {
 }
 
 /** One connection per mounted app. All gameplay decisions are validated by the server. */
-export class CatanConnection {
+class SocketCatanConnection {
   readonly socket: Socket;
   private current: RoomSnapshot | null = null;
   private activeSession: Session | null = null;
@@ -158,6 +160,61 @@ export class CatanConnection {
   }
 }
 
+/** Both transports expose the same game commands; Vercel uses Firestore-backed HTTP rooms. */
+export class CatanConnection {
+  private readonly transport: SocketCatanConnection | HttpCatanConnection;
+  constructor(url?: string) {
+    this.transport =
+      import.meta.env?.VITE_ONLINE_TRANSPORT === 'http'
+        ? new HttpCatanConnection(url)
+        : new SocketCatanConnection(url);
+  }
+  get socket(): Socket | null {
+    return this.transport instanceof SocketCatanConnection ? this.transport.socket : null;
+  }
+  onState(fn: (state: RoomSnapshot) => void) {
+    return this.transport.onState(fn);
+  }
+  onConnection(fn: (connected: boolean) => void) {
+    return this.transport.onConnection(fn);
+  }
+  onDisconnect(fn: () => void) {
+    return this.transport.onDisconnect(fn);
+  }
+  savedSession() {
+    return this.transport.savedSession();
+  }
+  clearSession() {
+    this.transport.clearSession();
+  }
+  create(options: CreateRoom) {
+    return this.transport.create(options);
+  }
+  join(code: string, name: string) {
+    return this.transport.join(code, name);
+  }
+  resume(session: Session) {
+    return this.transport.resume(session);
+  }
+  start() {
+    return this.transport.start();
+  }
+  action(action: GameAction) {
+    return this.transport.action(action);
+  }
+  proposeTrade(player: number, give: Resources, receive: Resources) {
+    return this.transport.proposeTrade(player, give, receive);
+  }
+  acceptTrade(id: string) {
+    return this.transport.acceptTrade(id);
+  }
+  rejectTrade(id: string) {
+    return this.transport.rejectTrade(id);
+  }
+  close() {
+    this.transport.close();
+  }
+}
 export function createConnection(url?: string): CatanConnection {
   return new CatanConnection(url);
 }
