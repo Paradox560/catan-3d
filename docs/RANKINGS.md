@@ -15,7 +15,7 @@ Configure both private server environment variables:
 | `RANKINGS_ADMIN_USERNAME` | Your chosen username, 1–128 characters without leading/trailing whitespace or control characters |
 | `RANKINGS_ADMIN_PASSWORD` | Your chosen password, at least 10 characters and at most 1,024 UTF-8 bytes                       |
 
-Locally, set them in the ignored `.env` file and restart `npm start` or `npm run dev`. On Vercel, add them to the project's environment settings and redeploy. See the [Vercel configuration checklist](VERCEL.md). Open `/#rankings`, choose **Owner sign in**, and enter both values. Sign out when you finish on a shared computer.
+Locally, set them in the ignored `.env` file and restart `npm start` or `npm run dev`. On Vercel, add them to the project's environment settings and redeploy. These are the website owner credentials. In Firebase web mode, configure a separate dedicated Firebase Authentication backend account for database access; visitors never sign in as that account. See the [Firebase and Vercel configuration checklist](VERCEL.md). Open `/#rankings`, choose **Owner sign in**, and enter both values. Sign out when you finish on a shared computer.
 
 There is no first-time owner setup through the website. The retired `/api/rankings/setup` endpoint rejects requests, and old `rankings-admin.json` files are neither read nor changed. The environment variables are the only owner identity. Missing, partial, or invalid owner credentials disable editing while public rankings remain readable when the data store is configured.
 
@@ -33,7 +33,7 @@ The rankings API accepts changes from the same website origin. The included loca
 
 ## Persistence and recovery
 
-For Vercel, use **Cloud Firestore** with `RANKINGS_STORAGE=firestore`. See [Firebase setup and importing existing records](FIRESTORE.md). Ledger metadata and player/game documents persist independently of the application deployment. A database connection or configuration error returns an error; the API never falls back to local files.
+For Vercel, use **Cloud Firestore** with `RANKINGS_STORAGE=firestore` and `FIREBASE_AUTH_MODE=web`. The server signs in with the dedicated backend user, and Firestore Rules grant its UID access to the ledger. This requires the web config and backend email/password/UID, with no service-account JSON. See [Firebase setup and importing existing records](FIRESTORE.md). Legacy Admin-mode deployments remain supported with `FIREBASE_AUTH_MODE=admin`. Ledger metadata and player/game documents persist independently of the application deployment. A database connection or configuration error returns an error; the API never falls back to local files.
 
 With `RANKINGS_STORAGE=file`, `CATAN_DATA_DIR/rankings.json` stores all players, recorded games, and the revision number. Writes use atomic file replacement and private file permissions. A persistent disk is necessary to retain file-backed data when a hosted container is replaced. Back up `rankings.json` before moving hosts. It contains no owner credentials.
 
@@ -52,4 +52,4 @@ npm run test:rankings
 
 The rankings command builds the app, runs HTTP integration checks, and runs browser tests using temporary local storage. Checks cover public reading, environment-only owner access, generic login failures, session revocation, origin enforcement, CRUD, persistence, revision conflicts, validation, rate limiting, HTTPS cookies, and preservation of a corrupt ledger. Browser workflows cover player renames, shared read-only access, six-player records, mobile layout, conflict recovery, and retaining a draft after the session expires.
 
-The [Firestore emulator checks](FIRESTORE.md#emulator-verification) additionally verify sessions across separate processes, cold starts, distributed logout and rate limits, credential rotation, and expiration. Tests do not use your real ledger or Firebase credentials.
+The [Firestore emulator checks](FIRESTORE.md#emulator-verification) additionally verify sessions across separate processes, cold starts, distributed logout and rate limits, credential rotation, and expiration. The web-mode suite additionally uses the Auth emulator to verify the backend identity and its scoped Firestore permissions. Tests do not use your real ledger or Firebase credentials.
