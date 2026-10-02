@@ -8,14 +8,17 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
-    "start": "node --import tsx server/index.ts",
+    "start": "node --env-file-if-exists=.env --import tsx server/index.ts",
     "test:server": "node --import tsx server/smoke.ts",
     "test:e2e": "playwright test",
     "format": "prettier --write .",
-    "test:rankings": "npm run build && node --import tsx server/rankings.smoke.ts && playwright test --config=playwright.rankings.config.ts"
+    "test:rankings": "npm run build && node --import tsx server/rankings.smoke.ts && playwright test --config=playwright.rankings.config.ts",
+    "rankings:import": "node --env-file-if-exists=.env --import tsx server/rankings-import.ts",
+    "test:firestore": "node --import tsx server/firestore.smoke.ts"
   },
   "dependencies": {
     "express": "^5.2.1",
+    "firebase-admin": "^14.5.0",
     "lucide-react": "^0.468.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
