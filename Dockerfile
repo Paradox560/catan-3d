@@ -13,7 +13,8 @@ ENV CATAN_DATA_DIR=/app/server/data
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/server/index.ts ./server/index.ts
+COPY --from=build /app/server/index.ts /app/server/rankings.ts ./server/
+COPY --from=build /app/src/rankings/model.ts ./src/rankings/
 COPY --from=build /app/src/game/engine.ts /app/src/game/board.ts /app/src/game/types.ts ./src/game/
 RUN mkdir -p /app/server/data
 RUN chown node:node /app/server/data
