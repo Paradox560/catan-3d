@@ -1,10 +1,10 @@
-// Isolated emulator fixture; never publish this test identity to a real project.
+// Emulator fixture: only privileged emulator connections may access test data.
+// Anonymous clients and Firebase Authentication users are denied.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /catan/{ledger}/{document=**} {
-      allow read, write: if request.auth != null
-        && request.auth.uid == 'catan-test-backend';
+    match /catan/{document=**} {
+      allow read, write: if false;
     }
   }
 }

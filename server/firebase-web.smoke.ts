@@ -1,4 +1,4 @@
-/** Local-only Auth + Firestore integration: npm run test:firebase-web (both emulator hosts required). */
+/** Local-only web-config REST + Firestore integration: npm run test:firebase-web (both emulator hosts required). */
 import assert from 'node:assert/strict';
 import { randomBytes, createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -9,9 +9,8 @@ import express from 'express';
 import { initializeApp, deleteApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
-import { getApps, deleteApp as deleteWebApp } from 'firebase/app';
 import { createRankingsFirestore, type RankingsFirestore } from './firebase.js';
-import { createWebAuth } from './firebase-web-auth.js';
+import { createFirestoreRest } from './firestore-rest.js';
 import { FirestoreRankingsStore } from './rankings-firestore.js';
 import { rankingsRouter } from './rankings.js';
 import { FirestoreOnlineRooms, onlineRouter, type OnlineReply } from './online.js';
@@ -35,9 +34,7 @@ for (const key of Object.keys(process.env)) {
 const projectId = 'demo-catan-web';
 const id = `web-test-${process.pid}-${randomBytes(5).toString('hex')}`;
 const documentPath = `catan/${id}`;
-const backendUid = 'catan-test-backend';
-const backendEmail = 'catan-test-backend@example.invalid';
-const backendPassword = `isolated-${randomBytes(20).toString('hex')}`;
+const outsiderPassword = `isolated-${randomBytes(20).toString('hex')}`;
 const outsiderUid = `outsider-${id}`;
 const outsiderEmail = `outsider-${id}@example.invalid`;
 const ownerUsername = 'web-smoke-owner';
@@ -52,9 +49,6 @@ const config: NodeJS.ProcessEnv = {
   FIREBASE_API_KEY: 'fake-api-key',
   FIREBASE_AUTH_DOMAIN: `${projectId}.firebaseapp.com`,
   FIREBASE_APP_ID: '1:123456789:web:012345abcdef',
-  FIREBASE_BACKEND_EMAIL: backendEmail,
-  FIREBASE_BACKEND_PASSWORD: backendPassword,
-  FIREBASE_BACKEND_UID: backendUid,
   FIREBASE_AUTH_EMULATOR_HOST: authHost,
   FIRESTORE_EMULATOR_HOST: firestoreHost,
   FIRESTORE_RANKINGS_DOCUMENT: documentPath,
@@ -69,7 +63,6 @@ adminDatabase.settings({ host: firestoreHost, ssl: false });
 const ledger = adminDatabase.doc(documentPath);
 const connections: RankingsFirestore[] = [];
 const servers: Server[] = [];
-const startingApps = new Set(getApps());
 const ownedDocuments = [documentPath, `catan/${id}-unrelated`];
 const own = (env: NodeJS.ProcessEnv = config) => {
   const connection = createRankingsFirestore(env);
@@ -160,14 +153,11 @@ async function command(client: Player, event: string, body: Record<string, unkno
 }
 try {
   // Admin access is confined to this demo emulator's fixture setup and cleanup.
-  try {
-    await adminAuth.createUser({ uid: backendUid, email: backendEmail, password: backendPassword });
-  } catch (error) {
-    if ((error as { code?: string }).code !== 'auth/uid-already-exists') throw error;
-    assert.equal((await adminAuth.getUser(backendUid)).email, backendEmail);
-    await adminAuth.updateUser(backendUid, { password: backendPassword });
-  }
-  await adminAuth.createUser({ uid: outsiderUid, email: outsiderEmail, password: backendPassword });
+  await adminAuth.createUser({
+    uid: outsiderUid,
+    email: outsiderEmail,
+    password: outsiderPassword,
+  });
   await adminDatabase
     .doc(ownedDocuments[1])
     .set({ unrelated: 'Preserve this fixture outside the selected ledger.' });
@@ -273,14 +263,32 @@ try {
     'Web-config owner login, public ranking reads, atomic edits/conflicts, cold starts, session expiry, and distributed logout passed.',
   );
 
-  const wrongIdentity = createWebAuth({ ...config, FIREBASE_BACKEND_EMAIL: outsiderEmail });
-  await assert.rejects(() => wrongIdentity.getToken(), /backend authentication failed/);
-  await wrongIdentity.close();
-  const outsider = own({
-    ...config,
-    FIREBASE_BACKEND_EMAIL: outsiderEmail,
-    FIREBASE_BACKEND_UID: outsiderUid,
+  const signIn = await fetch(
+    `http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: outsiderEmail,
+        password: outsiderPassword,
+        returnSecureToken: true,
+      }),
+    },
+  );
+  assert.equal(signIn.status, 200);
+  const { idToken } = (await signIn.json()) as { idToken: string };
+  assert.equal(typeof idToken, 'string');
+  const outsiderDatabase = createFirestoreRest({
+    projectId,
+    emulatorHost: firestoreHost,
+    getToken: async () => idToken,
   });
+  const outsider: RankingsFirestore = {
+    firestore: outsiderDatabase,
+    documentPath,
+    close: () => outsiderDatabase.terminate(),
+  };
+  connections.push(outsider);
   const protectedPaths = [
     documentPath,
     `${documentPath}/players/ada`,
@@ -331,7 +339,7 @@ try {
   await orphan.delete();
   assert.deepEqual((await rankings(firstURL)).value.data, data);
   console.info(
-    'Firebase Auth identity checks and rules denial for anonymous/unrelated users passed; orphan detection preserved.',
+    'Direct Firestore access denied for anonymous/Firebase users; orphan detection preserved.',
   );
 
   for (const capacity of [4, 6]) {
@@ -464,14 +472,9 @@ try {
     ),
   );
   await Promise.all(connections.map((connection) => connection.close()));
-  await Promise.all(
-    getApps()
-      .filter((app) => !startingApps.has(app))
-      .map((app) => deleteWebApp(app).catch(() => {})),
-  );
   for (const ownedPath of ownedDocuments)
     await adminDatabase.recursiveDelete(adminDatabase.doc(ownedPath));
-  for (const uid of [outsiderUid, backendUid]) await adminAuth.deleteUser(uid).catch(() => {});
+  for (const uid of [outsiderUid]) await adminAuth.deleteUser(uid).catch(() => {});
   await adminDatabase.terminate();
   await deleteApp(adminApp);
   rmSync(directory, { recursive: true, force: true });
