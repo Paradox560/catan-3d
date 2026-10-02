@@ -23,10 +23,6 @@ describe('Web-config Firestore factory', () => {
     FIREBASE_PROJECT_ID: 'demo-catan-web',
     FIREBASE_AUTH_DOMAIN: 'demo-catan-web.firebaseapp.com',
     FIREBASE_APP_ID: '1:123456:web:abcdef123456',
-    FIREBASE_BACKEND_EMAIL: 'backend@example.invalid',
-    FIREBASE_BACKEND_PASSWORD: 'isolated-backend-password',
-    FIREBASE_BACKEND_UID: 'catan-test-backend',
-    FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
     FIRESTORE_EMULATOR_HOST: '127.0.0.1:8181',
   };
 
@@ -35,6 +31,12 @@ describe('Web-config Firestore factory', () => {
     expect(connection.documentPath).toBe('catan/rankings');
     expect(connection.firestore.doc('catan/rankings').path).toBe('catan/rankings');
     await Promise.all([connection.close(), connection.close()]);
+  });
+
+  it('uses the existing ledger by default without additional storage configuration', async () => {
+    const connection = createRankingsFirestore({ ...web, FIRESTORE_RANKINGS_DOCUMENT: undefined });
+    expect(connection.documentPath).toBe('catan/rankings');
+    await connection.close();
   });
 
   it('accepts the Console web config as one JSON variable', async () => {
@@ -67,10 +69,7 @@ describe('Web-config Firestore factory', () => {
     },
   );
 
-  it('does not fall back to Admin when backend account settings are incomplete', () => {
-    expect(() => createRankingsFirestore({ ...web, FIREBASE_BACKEND_UID: undefined })).toThrow(
-      /FIREBASE_BACKEND_UID/,
-    );
+  it('does not fall back to Admin when web configuration is incomplete', () => {
     expect(() => createRankingsFirestore({ ...configured, FIREBASE_AUTH_MODE: 'web' })).toThrow(
       /FIREBASE_API_KEY/,
     );
