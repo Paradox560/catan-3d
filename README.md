@@ -56,7 +56,9 @@ Choose **Rankings** in the game header, or open `/#rankings`. Everyone can read 
 
 On localhost, choose **Set up owner access** and create your private password. The owner can add or rename players and record, edit, or delete games with a date, two to six players, notes, and each player's VP breakdown. Totals calculate from settlements, cities, victory point cards, Longest Road, Largest Army, and optional other VP. Records are manual, so tabletop games can be included too.
 
-For a public deployment, set the private `RANKINGS_ADMIN_PASSWORD` environment secret and use HTTPS with persistent storage. Share the rankings URL with friends; keep the owner password private. Rankings are stored on the server and survive room expiry. See [owner setup, persistence, and recovery](docs/RANKINGS.md).
+For a public deployment, use **Cloud Firestore**, set the private `RANKINGS_ADMIN_PASSWORD` environment secret, and serve the app over HTTPS. The server authenticates with Firebase Admin; browser visitors do not receive database credentials. The configured project is `inventory-management-6626b`, with ledger metadata at `catan/rankings` and player/game subcollections below it. Existing JSON records can be imported explicitly. See [Firestore setup and migration](docs/FIRESTORE.md) and [owner setup, scoring, and recovery](docs/RANKINGS.md).
+
+Without Firestore configuration, local development retains file storage. `RANKINGS_STORAGE=firestore` selects the database explicitly and never falls back to files on a connection or credential error. Live online rooms still use file storage and need a persistent disk to survive deployments.
 
 ## Board controls
 
@@ -96,9 +98,10 @@ The included `Dockerfile` builds the frontend and runs one Node process. `render
 
 1. Push this repository to a Git repository you control.
 2. In Render, create a **Blueprint** from that repository, or create a **Web Service** using the Docker runtime and this repository's `Dockerfile`.
-3. Deploy the repository root. The Dockerfile supplies its own build and start commands; no additional Docker command is needed.
-4. Once available, open the service's public HTTPS URL and verify that `/api/health` returns `{"ok":true,...}`.
-5. Create a room and join from a separate browser/device before sharing the URL with your whole group.
+3. Supply the requested `FIREBASE_SERVICE_ACCOUNT_JSON` and `RANKINGS_ADMIN_PASSWORD` secrets. The Blueprint uses the existing Firebase project for rankings; it does not create a new database or billing plan. See [Firestore setup](docs/FIRESTORE.md).
+4. Deploy the repository root. The Dockerfile supplies its own build and start commands; no additional Docker command is needed.
+5. Once available, open the service's public HTTPS URL and verify that `/api/health` returns `{"ok":true,...}` and `/api/rankings` loads the expected records.
+6. Create a room and join from a separate browser/device before sharing the URL with your whole group.
 
 Render builds the image from the repository and starts the Dockerfile's command. See [Docker on Render](https://render.com/docs/docker) and [web service setup](https://render.com/docs/web-services).
 
@@ -141,7 +144,7 @@ The container runs as the `node` user. Bind-mounted directories must be writable
 | `ALLOWED_ORIGINS`         | Empty                      | Extra exact browser origins accepted by the socket server; same-origin requests already work |
 | `RANKINGS_ADMIN_PASSWORD` | Unset                      | Private owner password for rankings; at least ten characters; configure as a hosting secret  |
 
-`.env.example` documents these values. The server does **not** load a `.env` file automatically. Either set environment variables in the hosting dashboard/shell, or use Node's environment-file support after copying the example to `.env`:
+`RANKINGS_STORAGE=firestore`, `FIREBASE_PROJECT_ID`, `FIRESTORE_RANKINGS_DOCUMENT`, and a server credential source configure cloud rankings. See [all Firebase settings](docs/FIRESTORE.md). `.env.example` documents these values. `npm start` and `npm run dev` load an ignored `.env` file when present; hosting or shell environment variables take precedence. To start the server directly after copying the example to `.env`:
 
 ```sh
 node --env-file=.env --import tsx server/index.ts
@@ -169,6 +172,8 @@ npm run test:e2e
 The browser suite checks local save/resume, four- and six-player online room setup, turn ownership, paired turns, reconnecting, and the mobile interface. The engine suite includes full matches through a 10-point win in both modes.
 
 The rankings suite builds the app, checks the owner API, and runs isolated browser tests for public reading, recording/editing/deleting games, renaming players, six-player records, mobile layout, session expiry, and concurrent edits. It uses temporary storage and does not change your real ledger.
+
+`npm run test:firestore` verifies cloud storage behavior against a local Firestore emulator, including atomic conflicts, restart persistence, and safe import. It requires the emulator described in [Firestore verification](docs/FIRESTORE.md#emulator-verification) and refuses to use the real Firebase project.
 
 The engine suite checks board generation and rule behavior. The server integration runner starts a temporary real Socket.IO server and checks standard/extension rooms, setup, hidden hands, turn ownership, consent-only trades, origin rejection, hashed reconnect tokens, single-seat control, and recovery after a process restart. It uses temporary storage and removes it afterward. A sandbox must permit listening on a local TCP port to run this test.
 
@@ -203,6 +208,9 @@ src/rankings/               VP model, standings, validation, and API client
 src/rankings.css            Medieval rankings layout and responsive dialogs
 server/index.ts             Rooms, authentication, privacy, persistence, hosting
 server/rankings.ts          Persistent ledger, owner authentication, and rankings API
+server/rankings-firestore.ts  Atomic cloud records and revision conflict checks
+server/firebase.ts          Server-only Firebase credentials and database configuration
+server/rankings-import.ts   Explicit, non-overwriting import of existing JSON records
 server/smoke.ts             Real multiplayer integration tests
 server/rankings.smoke.ts    Isolated rankings HTTP integration tests
 Dockerfile                 Production image
