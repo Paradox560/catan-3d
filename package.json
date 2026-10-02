@@ -16,10 +16,12 @@
     "rankings:import": "node --env-file-if-exists=.env --import tsx server/rankings-import.ts",
     "test:firestore": "node --import tsx server/firestore.smoke.ts",
     "test:online-http": "node --import tsx server/online.smoke.ts",
-    "test:online-browser": "VITE_ONLINE_TRANSPORT=http npm run build && playwright test --config=playwright.http.config.ts"
+    "test:online-browser": "VITE_ONLINE_TRANSPORT=http npm run build && playwright test --config=playwright.http.config.ts",
+    "test:firebase-web": "node --import tsx server/firebase-web.smoke.ts"
   },
   "dependencies": {
     "express": "^5.2.1",
+    "firebase": "^12.19.0",
     "firebase-admin": "^14.5.0",
     "lucide-react": "^0.468.0",
     "react": "^19.1.0",
@@ -44,5 +46,10 @@
   },
   "engines": {
     "node": ">=22.12.0"
+  },
+  "overrides": {
+    "@firebase/firestore": {
+      "@grpc/grpc-js": "^1.13.6"
+    }
   }
 }
