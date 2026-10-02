@@ -1,5 +1,5 @@
-import { FileRankingsStore, RankingsStorageError, type RankingsStore } from './rankings-store';
-import { MemoryOwnerAuthStore, type OwnerAuthStore } from './owner-auth';
+import { FileRankingsStore, RankingsStorageError, type RankingsStore } from './rankings-store.js';
+import { MemoryOwnerAuthStore, type OwnerAuthStore } from './owner-auth.js';
 
 export async function createRankingsStore(directory: string): Promise<RankingsStore> {
   return (await createRankingsServices(directory)).store;
@@ -20,9 +20,9 @@ export async function createRankingsServices(directory: string): Promise<{
   try {
     const [{ createRankingsFirestore }, { FirestoreRankingsStore }, { FirestoreOwnerAuthStore }] =
       await Promise.all([
-        import('./firebase'),
-        import('./rankings-firestore'),
-        import('./owner-auth-firestore'),
+        import('./firebase.js'),
+        import('./rankings-firestore.js'),
+        import('./owner-auth-firestore.js'),
       ]);
     const connection = createRankingsFirestore();
     const store = new FirestoreRankingsStore(connection.firestore, connection.documentPath);

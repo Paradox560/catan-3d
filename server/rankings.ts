@@ -1,15 +1,19 @@
 import express, { type Request, type Response } from 'express';
 import { randomBytes } from 'node:crypto';
-import { validateRankings, type RankingsData } from '../src/rankings/model';
-import { createRankingsServices } from './rankings-storage';
-import { RankingsConflictError, RankingsStorageError, type RankingsStore } from './rankings-store';
+import { validateRankings, type RankingsData } from '../src/rankings/model.js';
+import { createRankingsServices } from './rankings-storage.js';
+import {
+  RankingsConflictError,
+  RankingsStorageError,
+  type RankingsStore,
+} from './rankings-store.js';
 import {
   hashOwnerToken,
   matchesOwner,
   ownerCredentials,
   OWNER_SESSION_LIFETIME,
   type OwnerAuthStore,
-} from './owner-auth';
+} from './owner-auth.js';
 
 const COOKIE = 'catan_rankings_owner';
 const isLoopback = (address: string | undefined): boolean =>

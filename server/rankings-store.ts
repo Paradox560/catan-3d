@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { emptyRankings, validateRankings, type RankingsData } from '../src/rankings/model';
+import { emptyRankings, validateRankings, type RankingsData } from '../src/rankings/model.js';
 
 export interface RankingsStore {
   read(): Promise<RankingsData>;

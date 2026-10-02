@@ -1,6 +1,6 @@
 import express from 'express';
-import { rankingsRouter } from '../server/rankings';
-import { onlineRouter } from '../server/online';
+import { rankingsRouter } from '../server/rankings.js';
+import { onlineRouter } from '../server/online.js';
 
 // Vercel invokes this app per request; it must not listen on a port or use local saves.
 const app = express();

@@ -10,8 +10,12 @@ import {
   type RankedPlayer,
   type RankingsData,
   type RecordedGame,
-} from '../src/rankings/model';
-import { RankingsConflictError, RankingsStorageError, type RankingsStore } from './rankings-store';
+} from '../src/rankings/model.js';
+import {
+  RankingsConflictError,
+  RankingsStorageError,
+  type RankingsStore,
+} from './rankings-store.js';
 
 const SCHEMA = 'catan-rankings-v1';
 const MAX_WRITES = 450;

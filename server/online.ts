@@ -1,10 +1,10 @@
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { Timestamp, type Firestore } from 'firebase-admin/firestore';
-import { createRankingsFirestore } from './firebase';
-import { applyAction, createGame } from '../src/game/engine';
-import type { GameState } from '../src/game/types';
-import type { PendingTrade, RoomSnapshot, Session } from '../src/network';
+import { createRankingsFirestore } from './firebase.js';
+import { applyAction, createGame } from '../src/game/engine.js';
+import type { GameState } from '../src/game/types.js';
+import type { PendingTrade, RoomSnapshot, Session } from '../src/network.js';
 import {
   assert,
   emptyResources,
@@ -17,7 +17,7 @@ import {
   resources,
   roomCode,
   total,
-} from './online-validation';
+} from './online-validation.js';
 
 const TTL = 72 * 60 * 60 * 1000;
 const LEASE = 75_000;
@@ -519,13 +519,11 @@ export function onlineRouter(options: { store?: FirestoreOnlineRooms } = {}) {
       return res.status(413).json({ ok: false, error: 'This room request is too large.' });
     if (error instanceof SyntaxError)
       return res.status(400).json({ ok: false, error: 'Send a valid JSON room request.' });
-    res
-      .status(503)
-      .json({
-        ok: false,
-        error:
-          'The game server could not confirm this request. Reconnect to check the latest room before trying again.',
-      });
+    res.status(503).json({
+      ok: false,
+      error:
+        'The game server could not confirm this request. Reconnect to check the latest room before trying again.',
+    });
   });
   return router;
 }

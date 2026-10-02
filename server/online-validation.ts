@@ -1,4 +1,4 @@
-import type { GameAction, Resource, Resources } from '../src/game/types';
+import type { GameAction, Resource, Resources } from '../src/game/types.js';
 export const RESOURCE_NAMES: Resource[] = ['wood', 'brick', 'sheep', 'wheat', 'ore'];
 export const emptyResources = (): Resources => ({ wood: 0, brick: 0, sheep: 0, wheat: 0, ore: 0 });
 export const total = (resources: Resources): number =>

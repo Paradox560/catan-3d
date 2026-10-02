@@ -1,4 +1,4 @@
-import { createBoard, shuffle } from './board';
+import { createBoard, shuffle } from './board.js';
 import type {
   BuildKind,
   DevType,
@@ -8,7 +8,7 @@ import type {
   Player,
   Resource,
   Resources,
-} from './types';
+} from './types.js';
 
 export const RESOURCES: Resource[] = ['wood', 'brick', 'sheep', 'wheat', 'ore'];
 export const RESOURCE_NAMES: Record<Resource, string> = {

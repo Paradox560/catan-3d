@@ -5,7 +5,7 @@ import {
   type LoginReservation,
   type OwnerAuthStore,
   type OwnerSession,
-} from './owner-auth';
+} from './owner-auth.js';
 
 /** Private server-only collections: raw cookies, usernames, and passwords are never written. */
 export class FirestoreOwnerAuthStore implements OwnerAuthStore {

@@ -1,4 +1,4 @@
-import type { Board, GameConfig, Resource, Terrain } from './types';
+import type { Board, GameConfig, Resource, Terrain } from './types.js';
 
 /** Fisher–Yates; the injected source makes board generation replayable on any host. */
 export function shuffle<T>(items: readonly T[], random: () => number): T[] {
