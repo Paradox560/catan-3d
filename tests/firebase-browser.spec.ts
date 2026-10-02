@@ -46,12 +46,17 @@ test('public Firebase reads and server owner sign-in, game records, persistence 
   await page.getByRole('button', { name: 'Save game', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const table = page.getByRole('table', { name: /Players ranked by total victory points/ });
+  const totalVPColumn = await table
+    .getByRole('columnheader', { name: 'Total VP', exact: true })
+    .evaluate((cell) => (cell as HTMLTableCellElement).cellIndex);
+  expect(totalVPColumn).toBeGreaterThanOrEqual(0);
+  await expect(table.getByRole('columnheader').last()).toHaveText('Wins');
   await expect(
     table
       .getByRole('row')
       .filter({ has: page.getByRole('rowheader', { name: 'Ada', exact: true }) })
-      .getByRole('cell')
-      .last(),
+      .locator('th, td')
+      .nth(totalVPColumn),
   ).toHaveText('10');
   await page.reload();
   await expect(page.getByRole('button', { name: 'Lock editing' })).toBeVisible();
@@ -84,8 +89,8 @@ test('public Firebase reads and server owner sign-in, game records, persistence 
     table
       .getByRole('row')
       .filter({ has: page.getByRole('rowheader', { name: 'Ada', exact: true }) })
-      .getByRole('cell')
-      .last(),
+      .locator('th, td')
+      .nth(totalVPColumn),
   ).toHaveText('12');
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: 'test-results/firebase-rankings-mobile.png', fullPage: true });
