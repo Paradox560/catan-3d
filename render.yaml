@@ -1,5 +1,5 @@
-# Rankings use Firebase web config plus a dedicated Firebase Authentication backend user.
-# Enable Email/Password and publish the scoped UID rules described in docs/VERCEL.md first.
+# Vercel web-config deployments use docs/VERCEL.md, not this Render blueprint.
+# Render uses the legacy Admin connection with a server-only service-account secret.
 # No new paid resources are requested by this Blueprint. Firebase quotas/billing still apply.
 # For durable live rooms, select a paid web-service plan and uncomment disk below.
 # Review current plans and costs in your Render account before deploying.
@@ -20,23 +20,13 @@ services:
       - key: RANKINGS_STORAGE
         value: firestore
       - key: FIREBASE_AUTH_MODE
-        value: web
-      - key: FIREBASE_API_KEY
-        sync: false
-      - key: FIREBASE_AUTH_DOMAIN
-        sync: false
-      - key: FIREBASE_APP_ID
+        value: admin
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false
       - key: FIREBASE_PROJECT_ID
         value: inventory-management-6626b
       - key: FIRESTORE_RANKINGS_DOCUMENT
         value: catan/rankings
-      - key: FIREBASE_BACKEND_EMAIL
-        sync: false
-      - key: FIREBASE_BACKEND_PASSWORD
-        sync: false
-      - key: FIREBASE_BACKEND_UID
-        sync: false
       - key: RANKINGS_ADMIN_PASSWORD
         sync: false
       - key: RANKINGS_ADMIN_USERNAME
