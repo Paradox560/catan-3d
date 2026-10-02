@@ -1,4 +1,4 @@
-# Rankings use the existing Firebase project; provide the two private secrets at deploy time.
+# Rankings use the existing Firebase project; provide the private credentials at deploy time.
 # No new paid resources are requested by this Blueprint. Firebase quotas/billing still apply.
 # For durable live rooms, select a paid web-service plan and uncomment disk below.
 # Review current plans and costs in your Render account before deploying.
@@ -25,6 +25,8 @@ services:
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false
       - key: RANKINGS_ADMIN_PASSWORD
+        sync: false
+      - key: RANKINGS_ADMIN_USERNAME
         sync: false
     # Optional: add ALLOWED_ORIGINS in the dashboard if your reverse proxy
     # changes the Host header. Set it to the exact public https:// origin.
