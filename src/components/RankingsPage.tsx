@@ -33,7 +33,6 @@ import {
   loginRankings,
   logoutRankings,
   saveRankings,
-  usesFirebaseRankings,
   watchRankingsAccess,
 } from '../rankings/client';
 import '../rankings.css';
@@ -548,9 +547,7 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
                     setAuthOpen(true);
                   }}
                   disabled={!reply.access.configured}
-                  title={
-                    !reply.access.configured ? 'Owner access has not been configured.' : undefined
-                  }
+                  title={!reply.access.configured ? 'Owner access is unavailable.' : undefined}
                 >
                   <LockKeyhole size={15} />
                   Owner sign in
@@ -560,7 +557,7 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
         </div>
         {reply && !reply.access.configured && (
           <p className="rankings-field-hint" role="status">
-            Owner access has not been configured. The ledger is available to read.
+            Owner access is unavailable. The ledger is available to read.
           </p>
         )}
         {loadError && (
@@ -952,23 +949,19 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
       {authOpen && reply && (
         <Modal
           title="Owner sign in"
-          subtitle={
-            usesFirebaseRankings
-              ? 'Sign in with your owner email to manage games and players.'
-              : 'Unlock the keeper’s desk to manage games and players.'
-          }
+          subtitle="Sign in with your owner username to manage games and players."
           onClose={closeAuth}
           busy={authBusy}
         >
           <form onSubmit={(event) => void authenticate(event)} className="rankings-form">
             <label htmlFor="rankings-username">
-              {usesFirebaseRankings ? 'Owner email' : 'Owner username'}
+              Owner username
               <input
                 id="rankings-username"
-                type={usesFirebaseRankings ? 'email' : 'text'}
+                type="text"
                 autoComplete="username"
                 required
-                maxLength={usesFirebaseRankings ? 254 : 128}
+                maxLength={128}
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
                 autoFocus
