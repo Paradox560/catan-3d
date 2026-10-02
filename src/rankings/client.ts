@@ -3,7 +3,7 @@ import type { RankingsAccess } from './types';
 export { RankingsError } from './types';
 export type { RankingsAccess, RankingsReply } from './types';
 
-// Browser Firebase is the default. The HTTP mode is for existing local Node installs.
+// Public reads use Firebase by default; owner actions always use server authentication.
 export const usesFirebaseRankings = import.meta.env.VITE_RANKINGS_TRANSPORT !== 'http';
 const client = () => (usesFirebaseRankings ? import('./firebase-client') : import('./http-client'));
 
