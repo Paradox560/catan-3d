@@ -1,10 +1,10 @@
 # Firestore persistence
 
-The default rankings page uses the **Firebase browser SDK** with Firebase Authentication and owner-only Security Rules. Configure the seven public `VITE_FIREBASE_*` fields and follow [the setup guide](VERCEL.md). Rankings require no backend account, service-account JSON, Vercel IAM grant, or owner password environment variable.
+Public rankings load through the Firebase browser SDK. Owner login and saves use the Catan API with environment-configured credentials and the existing Firebase Admin service-account JSON. Follow [the environment setup](VERCEL.md); no Firebase Authentication or owner UID configuration is required.
 
 ## Existing data
 
-The database remains `inventory-management-6626b`, default Firestore database, with these paths:
+The database is `inventory-management-6626b`, default Firestore database. Public records remain at:
 
 ```text
 catan/rankings                    schema/version/revision/playerIds/gameIds
@@ -12,34 +12,46 @@ catan/rankings/players/{id}       player ID and name
 catan/rankings/games/{id}         date, notes, participants, VP breakdowns
 ```
 
-The browser uses the same schema as the existing server. Records stay in place; do not delete or re-create the ledger when enabling browser access. An empty database is initialized by the owner's first save. The client refuses incompatible metadata, incomplete records, orphan records, or invalid VP data instead of overwriting them.
+The browser and server use the existing `catan-rankings-v1` schema. Do not delete or recreate the ledger while changing connection settings. An empty ledger is initialized by the owner's first API save. Incompatible metadata, incomplete indexes, orphan records and invalid VP data are rejected before saving.
 
-Public visitors may read only these rankings documents. **Do not make the entire Catan subtree public.** Its other subcollections can contain private online game state, session hashes, and rate limits. The scoped [rules template](../firestore.rules.example) keeps those inaccessible to browser clients, including the owner.
+Only those three paths receive public client reads. The [rules template](../firestore.rules.example) grants no client writes and no client access to room state, sessions, rate limits or nested record subcollections. Preserve the rules for unrelated collections when merging it. Admin SDK operations are authorized by Google IAM and bypass client Security Rules. [Firestore server access](https://firebase.google.com/docs/firestore/security/get-started).
 
-## Reads, saves, and conflicts
+## Reads, saves and conflicts
 
-Reads come from the server, validate metadata and record indexes, and retry when the ledger changes during loading. Saves validate the complete proposed ledger, compare its revision in a transaction, and write only changed player/game documents plus the updated metadata. Deletes use the same atomic transaction. A stale owner tab receives a conflict and retains its draft for review.
+Public reads use server-confirmed Firestore results, validate record indexes and retry if the metadata revision changes while loading. Owner saves go to the same-origin API. The server validates the complete ledger and uses a Firestore transaction to compare revisions, write changed records, delete removed records and increment metadata atomically.
 
-The application limits a save to 449 changed/deleted player or game documents plus one metadata write, with a conservative request-size guard. Save large imports in smaller groups. Rankings contain at most 500 players and 2,000 games; they are loaded as a complete ledger, so pagination should precede very large archives.
+A stale owner tab receives a conflict and retains its draft. A save can change at most 449 player/game documents plus one metadata document, with a conservative request-size guard. The ledger supports up to 500 players and 2,000 games. It is loaded in full; large archives will need pagination before reaching request-size limits.
 
-A successful save means Firestore acknowledged it. Offline or failed writes do not silently fall back to browser storage or local files. Refresh after an uncertain network failure before retrying. Firestore records survive browser closure, application restarts, and Vercel redeployments. Backups are still needed to recover intentional deletions.
+A successful save means Firestore acknowledged the write. An uncertain network failure requires reloading before retrying. There is no fallback to browser storage or local files on a cloud error. Records survive browser closure, application restarts and Vercel redeployments. Backups remain necessary to recover deletions.
 
-## Owner access
+## Server configuration and owner access
 
-Enable Firebase Authentication Email/Password and create your own user. Replace `__CATAN_OWNER_UID__` in the rules template with that user's UID and publish the merged rules. The owner signs in through the website. Passwords belong in Firebase Auth and the sign-in form, never in public environment variables. No separate owner UID environment variable is needed: the app checks the rules-protected owner access path.
+Set `RANKINGS_STORAGE=firestore`, `FIREBASE_AUTH_MODE=admin`, `FIRESTORE_RANKINGS_DOCUMENT=catan/rankings` and the server-only `FIREBASE_SERVICE_ACCOUNT_JSON` Secret. The required `FIREBASE_PROJECT_ID=inventory-management-6626b` must match the JSON credential. Set `RANKINGS_ADMIN_USERNAME` and `RANKINGS_ADMIN_PASSWORD` as Secrets; use at least ten password characters. The [Vercel guide](VERCEL.md#environment-variables) lists public and server fields separately.
 
-Client rules do not restrict Google IAM identities such as the existing multiplayer server. Keep that backend's permissions and credentials server-only. [Firebase rules and server access](https://firebase.google.com/docs/firestore/security/get-started).
+Owner sessions last twelve hours in HTTP-only cookies. Firestore stores session hashes and shared login limits, so authorization survives function instance changes. Signing out revokes the session. Changing owner credentials and redeploying invalidates earlier sessions on the updated deployment. Passwords and service-account keys never belong in `VITE_*` variables or Git.
 
-## Legacy local server and imports
+For local development, `GOOGLE_APPLICATION_CREDENTIALS` may point to the existing JSON file outside the repository instead of storing its contents in `FIREBASE_SERVICE_ACCOUNT_JSON`. Configure only one credential source. Keep `FIREBASE_AUTH_MODE=admin` and the same project/document settings.
 
-Existing local Node installations can explicitly build with `VITE_RANKINGS_TRANSPORT=http` and use `RANKINGS_STORAGE=file` or their existing server Firestore connection. Only that legacy mode uses `RANKINGS_ADMIN_USERNAME` and `RANKINGS_ADMIN_PASSWORD`. Its Vercel API route is retired.
+## Local files and imports
 
-The existing `rankings:import` command remains a privileged server-side maintenance tool. Use its documented `--help` and an authorized local Admin connection when importing an existing `server/data/rankings.json`. Do not copy a service-account key into the public app or run imports against the live ledger without reviewing the target and backup.
+Local Node installations can use `VITE_RANKINGS_TRANSPORT=http` with `RANKINGS_STORAGE=file`. Rankings then live in `CATAN_DATA_DIR/rankings.json`. File writes use atomic replacement, and hosted file storage needs a persistent disk. The owner login still uses the same server environment variables.
 
-The local Socket.IO server still saves rooms to `CATAN_DATA_DIR/rooms.json`; local pass-and-play remains in browser storage. Hosted rooms use the separate [multiplayer backend](MULTIPLAYER_BACKEND.md). Enabling browser rankings does not migrate or expose room data.
+The `rankings:import` command remains an explicit maintenance operation. Read its `--help`, review the target and backup, and use an authorized local Admin connection before importing an old JSON ledger. Enabling Firestore does not import, delete or rewrite existing local files automatically.
+
+Socket.IO rooms remain in `CATAN_DATA_DIR/rooms.json`; Vercel HTTP rooms persist in private Firestore documents. Local pass-and-play stays in browser storage. Rankings do not expire when rooms expire.
 
 ## Emulator verification
 
-Browser tests use an isolated `demo-` Firebase project, real Firebase Web SDK calls, and local Auth/Firestore emulators. The test rules are generated from the production template with a fixture owner UID. Tests cover public reads, owner CRUD, wrong-user denial, private-subcollection denial, revision conflicts, and existing-record preservation. They do not publish rules or access the real database.
+The browser rules fixture is generated from the exact read-only production template. Start the isolated Firestore emulator and run SDK/API and UI checks sequentially:
 
-Legacy server tests remain available with `npm run test:firebase-web`, `npm run test:firestore`, and `npm run test:rankings`. The last command explicitly builds the local HTTP rankings variant. Build again normally before deploying the browser Firebase variant.
+```sh
+npm run firebase:browser:rules
+firebase emulators:start --only firestore --project demo-catan-browser --config firebase.browser.emulator.json
+# In another terminal:
+npm run test:firebase-browser
+npm run test:firebase-browser-ui
+```
+
+These tests use the actual browser read path and environment-based HTTP owner flow. They verify public reads, denied direct client writes, private-subcollection denial, owner CRUD, conflict handling and persistence. No Auth emulator, real credential or production rules publication is involved. Run suites sequentially because each cleans the same demo ledger.
+
+`npm run test:firestore` verifies server transactions, shared owner sessions, credential rotation and safe import against its separate local Firestore emulator configuration. `npm run test:rankings` verifies the HTTP API and desktop/mobile editing with temporary file storage. It explicitly builds `VITE_RANKINGS_TRANSPORT=http`; build normally again before deploying the hybrid Firebase variant.
