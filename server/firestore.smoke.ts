@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deleteApp, initializeApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { hashOwnerToken } from './owner-auth';
 import { emptyBreakdown, emptyRankings, type RankingsData } from '../src/rankings/model';
 import { FirestoreRankingsStore } from './rankings-firestore';
 import { importRankings } from './rankings-import';
@@ -28,6 +29,7 @@ const id = `rankings-test-${process.pid}-${randomBytes(6).toString('hex')}`;
 const documentPath = `catan/${id}`;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const directory = mkdtempSync(path.join(tmpdir(), 'catan-firestore-test-'));
+const username = 'isolated-firestore-owner';
 const password = 'isolated-firestore-test-password';
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const app = initializeApp({ projectId }, id);
@@ -83,6 +85,7 @@ async function start(overrides: NodeJS.ProcessEnv = {}, seed?: RankingsData): Pr
     FIREBASE_PROJECT_ID: projectId,
     FIRESTORE_RANKINGS_DOCUMENT: documentPath,
     FIRESTORE_EMULATOR_HOST: host,
+    RANKINGS_ADMIN_USERNAME: username,
     RANKINGS_ADMIN_PASSWORD: password,
     ...overrides,
   });
@@ -153,7 +156,13 @@ async function request(
   return { response, value };
 }
 async function login(server: TestServer): Promise<void> {
-  const { response, value } = await request(server, 'POST', { password }, false, '/login');
+  const { response, value } = await request(
+    server,
+    'POST',
+    { username, password },
+    false,
+    '/login',
+  );
   assert.equal(response.status, 200, JSON.stringify(value));
   assert.equal(value.access.authenticated, true);
   assert.match(response.headers.get('set-cookie') ?? '', /HttpOnly/);
@@ -217,8 +226,15 @@ try {
   });
   assert.equal((await request(first, 'PUT', emptyRankings())).response.status, 401);
   assert.equal(
-    (await request(first, 'POST', { password: 'incorrect-owner-password' }, false, '/login'))
-      .response.status,
+    (
+      await request(
+        first,
+        'POST',
+        { username, password: 'incorrect-owner-password' },
+        false,
+        '/login',
+      )
+    ).response.status,
     401,
   );
   await login(first);
@@ -290,6 +306,27 @@ try {
     data,
     'A new server with an empty local data directory reads Firestore.',
   );
+  second.cookie = first.cookie;
+  assert.equal(
+    (await request(second, 'GET', undefined, true)).value.access.authenticated,
+    true,
+    'An owner cookie is accepted by a separate process without signing in again.',
+  );
+  const sessionId = hashOwnerToken(first.cookie.split('=')[1]);
+  const savedSession = (
+    await ledgerDocument.collection('ownerSessions').doc(sessionId).get()
+  ).data()!;
+  assert.equal(Object.keys(savedSession).sort().join(','), 'expiresAt,fingerprint,version');
+  assert.ok(!JSON.stringify(savedSession).includes(password));
+  assert.ok(!JSON.stringify(savedSession).includes(username));
+  assert.ok(!JSON.stringify(savedSession).includes(first.cookie.split('=')[1]));
+  await request(second, 'POST', {}, true, '/logout');
+  assert.equal(
+    (await request(first, 'GET', undefined, true)).value.access.authenticated,
+    false,
+    'Logging out on another instance revokes the original cookie everywhere.',
+  );
+  await login(first);
   await login(second);
   const left = structuredClone(data);
   const right = structuredClone(data);
@@ -330,7 +367,41 @@ try {
     data,
     'Saved rankings survive process restart and replacement of local storage.',
   );
+  restarted.cookie = second.cookie;
+  assert.equal(
+    (await request(restarted, 'GET', undefined, true)).value.access.authenticated,
+    true,
+    'Owner sessions survive a cold start.',
+  );
+  await ledgerDocument
+    .collection('ownerSessions')
+    .doc(hashOwnerToken(restarted.cookie.split('=')[1]))
+    .update({ expiresAt: Timestamp.fromMillis(Date.now() - 1) });
+  assert.equal(
+    (await request(restarted, 'GET', undefined, true)).value.access.authenticated,
+    false,
+    'Expired sessions are rejected even before optional Firestore TTL cleanup.',
+  );
   await login(restarted);
+  for (const override of [
+    { RANKINGS_ADMIN_USERNAME: 'rotated-owner' },
+    { RANKINGS_ADMIN_PASSWORD: 'rotated-owner-test-password' },
+    { RANKINGS_ADMIN_USERNAME: undefined },
+    { RANKINGS_ADMIN_PASSWORD: undefined },
+  ]) {
+    const changed = await start(override);
+    changed.cookie = restarted.cookie;
+    const publicRead = await request(changed, 'GET', undefined, true);
+    assert.equal(publicRead.response.status, 200);
+    assert.deepEqual(publicRead.value.data, data);
+    assert.equal(
+      publicRead.value.access.authenticated,
+      false,
+      'Changed or missing env credentials invalidate previous cookies.',
+    );
+    assert.equal((await request(changed, 'PUT', data, true)).response.status, 401);
+    await stop(changed);
+  }
   data.games = [];
   data = await save(restarted, data);
   assert.equal(data.revision, 4);
@@ -417,6 +488,33 @@ try {
   }
   console.info(
     'Firestore corruption/orphan detection, reserved document protection, and configuration failure safety passed.',
+  );
+
+  const ratePath = `catan/${id}-shared-auth`;
+  ownedPaths.push(ratePath);
+  const authLeft = await start({ FIRESTORE_RANKINGS_DOCUMENT: ratePath });
+  const authRight = await start({ FIRESTORE_RANKINGS_DOCUMENT: ratePath });
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const target = attempt % 2 === 0 ? authLeft : authRight;
+    assert.equal(
+      (await request(target, 'POST', { username, password: 'wrong-password' }, false, '/login'))
+        .response.status,
+      401,
+    );
+  }
+  for (const target of [authLeft, authRight]) {
+    const limited = await request(target, 'POST', { username, password }, false, '/login');
+    assert.equal(
+      limited.response.status,
+      429,
+      'Rate limit is shared across independent server processes.',
+    );
+    assert.ok(Number(limited.response.headers.get('retry-after')) > 0);
+  }
+  await stop(authLeft);
+  await stop(authRight);
+  console.info(
+    'Firestore shared sessions, logout, credential rotation, expiry, and distributed rate limits passed.',
   );
 
   const budgetPath = `catan/${id}-write-budget`;
