@@ -1,63 +1,69 @@
 # Firebase rankings on Vercel
 
-The rankings page uses the Firebase Web SDK directly: `initializeApp`, `getFirestore`, and Firebase Authentication. No Vercel-to-Google IAM setup, backend Firebase account, service-account JSON, or server owner password is required for rankings.
+The browser reads public rankings through the Firebase Web SDK. Owner sign-in and edits go through the same-origin Catan API, which uses the existing Firebase Admin service-account credential. Your owner username and password stay in server environment variables. Firebase Authentication, an owner UID, and Workload Identity Federation are not required.
 
 ## Environment variables
 
-Copy the values from **Firebase Console → Project settings → Your apps → Web config** into Vercel's **Production** environment:
+In Vercel's **Production** environment, add the standard Firebase Console web config as **Config** values:
 
-| Variable                            | Config field                               | Required |
-| ----------------------------------- | ------------------------------------------ | -------- |
-| `VITE_FIREBASE_API_KEY`             | `apiKey`                                   | Yes      |
-| `VITE_FIREBASE_AUTH_DOMAIN`         | `authDomain`                               | Yes      |
-| `VITE_FIREBASE_PROJECT_ID`          | `projectId` (`inventory-management-6626b`) | Yes      |
-| `VITE_FIREBASE_APP_ID`              | `appId`                                    | Yes      |
-| `VITE_FIREBASE_STORAGE_BUCKET`      | `storageBucket`                            | Optional |
-| `VITE_FIREBASE_MESSAGING_SENDER_ID` | `messagingSenderId`                        | Optional |
-| `VITE_FIREBASE_MEASUREMENT_ID`      | `measurementId`                            | Optional |
+| Variable                            | Firebase field                            |
+| ----------------------------------- | ----------------------------------------- |
+| `VITE_FIREBASE_API_KEY`             | `apiKey`                                  |
+| `VITE_FIREBASE_AUTH_DOMAIN`         | `authDomain`                              |
+| `VITE_FIREBASE_PROJECT_ID`          | `projectId`: `inventory-management-6626b` |
+| `VITE_FIREBASE_APP_ID`              | `appId`                                   |
+| `VITE_FIREBASE_STORAGE_BUCKET`      | `storageBucket`, optional                 |
+| `VITE_FIREBASE_MESSAGING_SENDER_ID` | `messagingSenderId`, optional             |
+| `VITE_FIREBASE_MEASUREMENT_ID`      | `measurementId`, optional                 |
 
-Enter plain values without surrounding quotes. The storage field ends in **STORAGE_BUCKET**, not `STORAGE_ID`. This is a Vite app, so `NEXT_PUBLIC_*` variables do not apply. `VITE_*` values are included in the browser bundle; they contain public Firebase identifiers only. Never put an owner password or service-account key there. [Vite environment variables](https://vite.dev/guide/env-and-mode), [Firebase web setup](https://firebase.google.com/docs/web/setup).
+Keep the `VITE_` prefix. These identifiers are compiled into the browser; the Firebase API key is part of the public web config. Use plain values without surrounding quotes. The storage variable ends in `STORAGE_BUCKET`, not `STORAGE_ID`. [Vite environment variables](https://vite.dev/guide/env-and-mode), [Firebase API keys](https://firebase.google.com/docs/projects/api-keys).
 
-In Vercel, select **Config** as the type for each of these seven variables and keep the `VITE_` prefix. If Vercel asks you to remove the public prefix to keep a value private, change its type to **Config**. Firebase web config, including its Firebase API key, is intended for the browser; Firebase Authentication and Firestore Rules protect access to the ledger. [Vercel variable types](https://vercel.com/changelog/environment-variables-now-use-config-and-secret-types), [Firebase API keys](https://firebase.google.com/docs/projects/api-keys).
+Set these server variables separately:
 
-**Redeploy after saving the variables.** They are read during the build. Do not copy the entire local `.env.example` into Vercel; use the seven public fields above. The `FIREBASE_BACKEND_*` and `RANKINGS_ADMIN_*` variables are not used by the new rankings page.
+| Variable                        | Vercel type | Value                                                                 |
+| ------------------------------- | ----------- | --------------------------------------------------------------------- |
+| `RANKINGS_ADMIN_USERNAME`       | Secret      | Your chosen owner username                                            |
+| `RANKINGS_ADMIN_PASSWORD`       | Secret      | Your chosen password, at least ten characters                         |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Secret      | The complete contents of your existing Firebase Admin JSON credential |
+| `RANKINGS_STORAGE`              | Config      | `firestore`                                                           |
+| `FIREBASE_AUTH_MODE`            | Config      | `admin`                                                               |
+| `FIREBASE_PROJECT_ID`           | Config      | `inventory-management-6626b`                                          |
+| `FIRESTORE_RANKINGS_DOCUMENT`   | Config      | `catan/rankings`                                                      |
 
-## Owner sign-in and rules
+Paste the credential's JSON contents into its Secret value, not its filename. Keep its `private_key` JSON escapes intact; do not add another outer layer of quotes. `FIREBASE_PROJECT_ID` is required and must match the credential's `project_id`. `FIREBASE_AUTH_MODE=admin` avoids selecting an older connection mode if previous `FIREBASE_API_KEY` or `FIREBASE_CONFIG` variables remain configured.
 
-1. In Firebase Authentication, enable **Email/Password**.
-2. Create your owner user under **Authentication → Users**, then copy that user's UID. This is your own login, not a separate backend account.
-3. In [firestore.rules.example](../firestore.rules.example), replace `__CATAN_OWNER_UID__` with that UID. Merge the Catan matches into your existing Firestore rules and publish them. Preserve rules for your inventory app and other collections. Remove any broader allow that exposes private Catan subcollections; Firestore rules combine matching allows.
-4. Add `catan-3d-ebon.vercel.app` to **Authentication → Settings → Authorized domains**. Add a custom website domain if you use one.
-5. Open the site's **Rankings → Owner sign in**, then enter the Firebase user's email and password. They are typed into the login form, not stored in Vercel environment variables.
+Never use `VITE_` for the owner password or service-account JSON, and never commit either to Git. The existing credential is used only by the server. No new Firebase account or key is needed. [Firebase Admin setup](https://firebase.google.com/docs/admin/setup).
 
-The rules allow public reads of the rankings metadata and the `players` and `games` collections. Only the configured owner may write rankings. Rooms, private hands, owner sessions, rate limits, and unrelated collections are never made public by these matches. The app offers sign-in only; it has no public owner-registration flow. [Email/password sign-in](https://firebase.google.com/docs/auth/web/password-auth), [Firestore Security Rules](https://firebase.google.com/docs/firestore/security/get-started).
+**Redeploy after saving variables.** Public config is read during the build, and server variables belong to each deployment. Existing deployments do not acquire changed values automatically. [Vercel environment variables](https://vercel.com/docs/environment-variables).
 
-A read of `catan/rankings/access/owner` checks the owner's permission using those rules. The document does not need to exist or contain data. This avoids a separate owner-UID environment variable. The rules remain the source of authorization even if someone modifies browser code.
+## Firestore rules and owner sign-in
 
-The browser keeps sign-in for the current tab session, including refreshes; **Lock editing** signs out. Existing recorded games stay in `catan/rankings` and its player/game subcollections, so no data migration is required. Saves use transactions and reject stale revisions instead of overwriting another tab's edits. An offline or failed save is not reported as confirmed.
+Merge the three exact public-read matches from [firestore.rules.example](../firestore.rules.example) into the existing rules, preserving unrelated inventory/application rules:
 
-The old Vercel `/api/rankings` route returns 410. Its previous environment-based credentials and cookies can no longer edit the hosted ledger. The legacy API remains available only for existing local Node installations built with `VITE_RANKINGS_TRANSPORT=http`.
+```text
+match /catan/rankings { allow get: if true; }
+match /catan/rankings/players/{playerId} { allow get, list: if true; }
+match /catan/rankings/games/{gameId} { allow get, list: if true; }
+```
 
-## Multiplayer
+Do not grant direct browser writes or make the entire `catan` subtree readable. Other subcollections hold private room state, owner sessions, and rate limits. A broader matching allow overrides the protection from having no allow here, so inspect overlapping rules when merging. Firebase Admin writes use the server's Google IAM credential and do not depend on client rules. [Firestore rules structure](https://firebase.google.com/docs/firestore/security/rules-structure), [server access](https://firebase.google.com/docs/firestore/security/get-started).
 
-Online games continue using their existing trusted backend to validate moves and protect private hands. Browser rankings do not depend on that backend. Leave its existing server-only settings in place if using online games; see [multiplayer backend configuration](MULTIPLAYER_BACKEND.md). The seven browser variables above are sufficient for rankings after Firebase Auth and rules are configured; they do not independently authorize the multiplayer server.
+Open **Rankings → Owner sign in** and enter the username/password from `RANKINGS_ADMIN_USERNAME` and `RANKINGS_ADMIN_PASSWORD`. The API verifies the credentials and sets a twelve-hour HTTP-only session cookie. **Lock editing** signs out and revokes it. Changing the owner environment values and redeploying invalidates earlier sessions on the new deployment.
+
+There is no Firebase Authentication provider, Firebase owner account, authorized-domain step, UID placeholder, or `access/owner` document to configure. Only the server may edit records. Both the client and server validate game data; the server commits edits atomically and rejects stale revisions.
+
+## Persistence and multiplayer
+
+Existing records stay under `catan/rankings`, with `players` and `games` subcollections. No migration is required. Firestore also holds private owner sessions, login limits, and Vercel online rooms; those records are not included in the public-read rules.
+
+The same server credential supports Vercel multiplayer. The server remains responsible for legal actions and private hands. Local Node hosting continues using Socket.IO with room files. The public Firebase config alone grants no server credentials.
+
+Public ranking reads use Firestore directly. Owner access checks use `/api/rankings/access`; login, save and logout use the corresponding `/api/rankings` routes. A service outage never silently switches a cloud ledger to local files. See [persistence details](FIRESTORE.md).
 
 ## Verification
 
-After redeploying, open `/#rankings` in a signed-out browser. The ledger should load without a request to `/api/rankings`. Sign in with the owner user, record a game, refresh, and verify the game remains. Another signed-out browser can read but cannot edit.
+After redeploying, open `/api/health` and `/#rankings` while signed out. Public records should load. Sign in with the environment username/password, record a game, reload and check that it remains. A separate signed-out browser can read the record but cannot edit. Sign out and confirm editing disappears.
 
-If Firebase reports missing permissions, check the published rules and exact owner UID. If sign-in fails, check that Email/Password is enabled and use the Firebase account's actual email/password. Missing configuration means the corresponding `VITE_FIREBASE_*` value was absent from the build; update Production and redeploy.
+If public reads fail, check the public build variables and published read-only rules. If owner login fails, check the two owner Secret values. If saving or online rooms fail, check the Admin JSON Secret, matching project, `FIREBASE_AUTH_MODE=admin`, storage mode and document path.
 
-Tests use isolated demo Firebase emulators. They do not use production credentials, publish production rules, or change real game records.
-
-To run the isolated browser checks locally:
-
-```sh
-npm run firebase:browser:rules
-firebase emulators:start --only auth,firestore --project demo-catan-browser --config firebase.browser.emulator.json
-# In another terminal, after the emulators are ready:
-npm run test:firebase-browser
-npm run test:firebase-browser-ui
-```
-
-Run these suites sequentially: each uses and cleans its own fixture data in the same demo ledger. The UI test uses an isolated Vite fixture to connect to emulators; production code contains no emulator environment switches.
+Tests use isolated demo data and a local Firestore emulator. They never publish production rules or use production credentials. The [emulator guide](FIRESTORE.md#emulator-verification) describes the public-read and HTTP-owner checks.
