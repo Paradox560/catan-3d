@@ -23,7 +23,7 @@ Set these server variables separately:
 | Variable                        | Vercel type | Value                                                                 |
 | ------------------------------- | ----------- | --------------------------------------------------------------------- |
 | `RANKINGS_ADMIN_USERNAME`       | Secret      | Your chosen owner username                                            |
-| `RANKINGS_ADMIN_PASSWORD`       | Secret      | Your chosen password, at least ten characters                         |
+| `RANKINGS_ADMIN_PASSWORD`       | Secret      | Your chosen non-empty password, up to 1,024 UTF-8 bytes               |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | Secret      | The complete contents of your existing Firebase Admin JSON credential |
 | `RANKINGS_STORAGE`              | Config      | `firestore`                                                           |
 | `FIREBASE_AUTH_MODE`            | Config      | `admin`                                                               |

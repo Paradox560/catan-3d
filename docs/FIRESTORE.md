@@ -26,7 +26,7 @@ A successful save means Firestore acknowledged the write. An uncertain network f
 
 ## Server configuration and owner access
 
-Set `RANKINGS_STORAGE=firestore`, `FIREBASE_AUTH_MODE=admin`, `FIRESTORE_RANKINGS_DOCUMENT=catan/rankings` and the server-only `FIREBASE_SERVICE_ACCOUNT_JSON` Secret. The required `FIREBASE_PROJECT_ID=inventory-management-6626b` must match the JSON credential. Set `RANKINGS_ADMIN_USERNAME` and `RANKINGS_ADMIN_PASSWORD` as Secrets; use at least ten password characters. The [Vercel guide](VERCEL.md#environment-variables) lists public and server fields separately.
+Set `RANKINGS_STORAGE=firestore`, `FIREBASE_AUTH_MODE=admin`, `FIRESTORE_RANKINGS_DOCUMENT=catan/rankings` and the server-only `FIREBASE_SERVICE_ACCOUNT_JSON` Secret. The required `FIREBASE_PROJECT_ID=inventory-management-6626b` must match the JSON credential. Set `RANKINGS_ADMIN_USERNAME` and `RANKINGS_ADMIN_PASSWORD` as Secrets; choose any non-empty password, up to 1,024 UTF-8 bytes. The [Vercel guide](VERCEL.md#environment-variables) lists public and server fields separately.
 
 Owner sessions last twelve hours in HTTP-only cookies. Firestore stores session hashes and shared login limits, so authorization survives function instance changes. Signing out revokes the session. Changing owner credentials and redeploying invalidates earlier sessions on the updated deployment. Passwords and service-account keys never belong in `VITE_*` variables or Git.
 

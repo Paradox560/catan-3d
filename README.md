@@ -151,7 +151,7 @@ The container runs as the `node` user. Bind-mounted directories must be writable
 | `CATAN_DATA_DIR`          | `<repository>/server/data` | Writable directory for Socket.IO room saves and file-backed rankings                         |
 | `ALLOWED_ORIGINS`         | Empty                      | Extra exact browser origins accepted by the socket server; same-origin requests already work |
 | `RANKINGS_ADMIN_USERNAME` | Unset                      | Private owner username for server-authorized rankings edits                                  |
-| `RANKINGS_ADMIN_PASSWORD` | Unset                      | Private owner password, at least ten characters                                              |
+| `RANKINGS_ADMIN_PASSWORD` | Unset                      | Private owner password; non-empty, up to 1,024 UTF-8 bytes                                   |
 
 Public ranking reads use the `VITE_FIREBASE_*` fields in `.env.example`. These are compiled into the frontend; owner credentials and `FIREBASE_SERVICE_ACCOUNT_JSON` stay server-only. Set `RANKINGS_STORAGE=firestore`, `FIREBASE_AUTH_MODE=admin`, the project ID and ledger path as described in [the setup guide](docs/VERCEL.md). Local file-only rankings can use `VITE_RANKINGS_TRANSPORT=http` with `RANKINGS_STORAGE=file`. `npm start` and `npm run dev` load an ignored `.env`; host and shell values take precedence. To start the server directly after copying the example to `.env`:
 
