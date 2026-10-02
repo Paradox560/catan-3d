@@ -1,4 +1,5 @@
 import express from 'express';
+import { rankingsRouter } from './rankings';
 import { createServer } from 'node:http';
 import { Server, type Socket } from 'socket.io';
 import { randomBytes, randomInt, createHash, timingSafeEqual } from 'node:crypto';
@@ -93,6 +94,7 @@ restore();
 
 const app = express();
 app.disable('x-powered-by');
+app.use('/api/rankings', rankingsRouter(DATA_DIR));
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'catan-3d', rooms: rooms.size });
 });
