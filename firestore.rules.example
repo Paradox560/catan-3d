@@ -1,13 +1,85 @@
-// Merge this scoped match into the existing rules; preserve unrelated apps' matches.
-// The Vercel backend uses Google IAM through Workload Identity Federation.
-// Browser clients use the Catan API and require no direct Firestore access.
-// A broader matching allow still wins: exclude this subtree from broad client grants.
+// Replace __CATAN_OWNER_UID__ with your own Firebase Authentication user's UID.
+// Merge these functions and exact Catan matches into your EXISTING rules.
+// Preserve unrelated inventory/application matches. Do not publish this file as
+// a replacement for an existing application's rules without merging them first.
+// A broader matching allow still wins; remove any broad Catan read/write grants.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /catan/rankings/{document=**} {
-      allow read, write: if false;
+    function catanOwner() {
+      return request.auth != null && request.auth.uid == '__CATAN_OWNER_UID__';
     }
-    // Preserve the rules for other applications here; do not replace them with this template.
+    function catanRoot() {
+      return /databases/$(database)/documents/catan/rankings;
+    }
+    function catanId(value) {
+      return value is string && value.matches('^[a-zA-Z0-9_-]{1,80}$');
+    }
+    function catanMetadata(data) {
+      return data.keys().hasOnly(['schema', 'version', 'revision', 'playerIds', 'gameIds'])
+        && data.schema == 'catan-rankings-v1' && data.version == 1
+        && data.revision is int && data.revision >= 1 && data.revision <= 9007199254740991
+        && data.playerIds is list && data.playerIds.size() <= 500
+        && data.playerIds.toSet().size() == data.playerIds.size()
+        && data.gameIds is list && data.gameIds.size() <= 2000
+        && data.gameIds.toSet().size() == data.gameIds.size();
+    }
+    // Child writes must commit with an incremented root revision. Root access
+    // calls are shared/cached across the atomic transaction's records.
+    function catanAtomicRevision() {
+      let after = getAfter(catanRoot()).data;
+      return after.schema == 'catan-rankings-v1'
+        && ((!exists(catanRoot()) && after.revision == 1)
+          || (exists(catanRoot()) && after.revision == get(catanRoot()).data.revision + 1));
+    }
+    match /catan/rankings {
+      allow get: if true;
+      allow create: if catanOwner() && catanMetadata(request.resource.data)
+        && request.resource.data.revision == 1;
+      allow update: if catanOwner() && catanMetadata(request.resource.data)
+        && resource.data.schema == 'catan-rankings-v1'
+        && request.resource.data.revision == resource.data.revision + 1;
+      // The ledger itself cannot be deleted by a browser.
+      allow delete: if false;
+    }
+    match /catan/rankings/players/{playerId} {
+      allow get, list: if true;
+      allow create, update: if catanOwner() && catanAtomicRevision()
+        && catanId(playerId) && request.resource.data.id == playerId
+        && playerId in getAfter(catanRoot()).data.playerIds
+        && request.resource.data.keys().hasOnly(['id', 'name'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 40;
+      allow delete: if catanOwner() && catanAtomicRevision()
+        && !(playerId in getAfter(catanRoot()).data.playerIds);
+    }
+    match /catan/rankings/games/{gameId} {
+      allow get, list: if true;
+      allow create, update: if catanOwner() && catanAtomicRevision()
+        && catanId(gameId) && request.resource.data.id == gameId
+        && gameId in getAfter(catanRoot()).data.gameIds
+        && request.resource.data.keys().hasOnly(['id', 'date', 'notes', 'results'])
+        && request.resource.data.date is string
+        && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.notes is string && request.resource.data.notes.size() <= 2000
+        && request.resource.data.results is list
+        && request.resource.data.results.size() >= 2 && request.resource.data.results.size() <= 6;
+      allow delete: if catanOwner() && catanAtomicRevision()
+        && !(gameId in getAfter(catanRoot()).data.gameIds);
+    }
+    // Authorization probe only: the document does not need to exist. Its
+    // existence or contents never grant access. There is no browser write rule.
+    match /catan/rankings/access/owner {
+      allow get: if catanOwner();
+    }
+    // No other Catan paths are granted client access, including onlineRooms,
+    // onlineLimits, ownerSessions, ownerRateLimits and nested child collections.
+    // Existing server-only multiplayer access remains governed by Google IAM.
+    // Rules enforce the owner boundary and basic record shape. The client also
+    // validates full VP breakdowns, distinct result players, real dates and
+    // complete indexes. Unrolling all nested VP checks here exceeds the Rules
+    // expression budget for six-player games.
+
+    // Preserve unrelated application matches here when merging into your rules.
   }
 }
