@@ -11,6 +11,7 @@ coverage/
 .env.*
 !.env.example
 *.tsbuildinfo
+.vercel/
 
 # Server credentials must never be committed.
 secrets/
