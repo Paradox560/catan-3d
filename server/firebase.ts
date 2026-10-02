@@ -8,6 +8,8 @@ import {
   type Credential,
 } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
+import { createWebAuth, parseWebAuthConfig } from './firebase-web-auth.js';
+import { createFirestoreRest } from './firestore-rest.js';
 
 export interface RankingsFirestore {
   firestore: Firestore;
@@ -53,7 +55,28 @@ function serviceAccountCredential(contents: string, projectId: string): Credenti
 }
 
 export function createRankingsFirestore(env: NodeJS.ProcessEnv = process.env): RankingsFirestore {
-  const projectId = env.FIREBASE_PROJECT_ID?.trim();
+  const webSelected = [
+    'FIREBASE_CONFIG',
+    'FIREBASE_API_KEY',
+    'FIREBASE_AUTH_DOMAIN',
+    'FIREBASE_APP_ID',
+    'FIREBASE_BACKEND_EMAIL',
+    'FIREBASE_BACKEND_PASSWORD',
+    'FIREBASE_BACKEND_UID',
+  ].some((key) => env[key] !== undefined);
+  const mode = env.FIREBASE_AUTH_MODE ?? (webSelected ? 'web' : 'admin');
+  if (mode !== 'web' && mode !== 'admin')
+    throw new Error('FIREBASE_AUTH_MODE must be web or admin.');
+  if (
+    mode === 'web' &&
+    (env.FIREBASE_SERVICE_ACCOUNT_JSON !== undefined ||
+      env.GOOGLE_APPLICATION_CREDENTIALS !== undefined)
+  )
+    throw new Error(
+      'Web config uses Firebase Authentication. Remove service-account JSON and key-file variables when FIREBASE_AUTH_MODE=web.',
+    );
+  const projectId =
+    mode === 'web' ? parseWebAuthConfig(env).options.projectId : env.FIREBASE_PROJECT_ID?.trim();
   if (!projectId || !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) {
     throw new Error('Set FIREBASE_PROJECT_ID to the Firebase project ID before using Firestore.');
   }
@@ -118,6 +141,31 @@ export function createRankingsFirestore(env: NodeJS.ProcessEnv = process.env): R
     }
   } else if (projectId.startsWith('demo-')) {
     throw new Error('Demo Firebase projects require FIRESTORE_EMULATOR_HOST.');
+  }
+
+  if (mode === 'web') {
+    const auth = createWebAuth(env);
+    const firestore = createFirestoreRest({
+      projectId,
+      databaseId,
+      emulatorHost,
+      getToken: auth.getToken,
+    });
+    let closing: Promise<void> | undefined;
+    return {
+      firestore,
+      documentPath,
+      close() {
+        closing ??= (async () => {
+          try {
+            await firestore.terminate();
+          } finally {
+            await auth.close();
+          }
+        })();
+        return closing;
+      },
+    };
   }
 
   let credential: Credential;
