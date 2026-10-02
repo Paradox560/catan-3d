@@ -25,7 +25,9 @@ npm ci
 npm run dev
 ```
 
-Open [localhost:5173](http://localhost:5173). The development command starts Vite and the multiplayer server together; Vite forwards `/socket.io` to the server on port 3001. Keep the terminal running. Choose **Local play** for one screen, or use separate browser profiles/devices for online seats.
+Open the **Local** URL printed in the terminal (normally [localhost:5173](http://localhost:5173); the launcher chooses another free page port when needed). The development command starts the multiplayer server first, then Vite. Vite forwards `/api` and `/socket.io` to the configured backend `PORT`, which defaults to 3001. Keep the terminal running. Choose **Local play** for one screen, or use separate browser profiles/devices for online seats.
+
+If the backend port is occupied, the launcher exits before starting another frontend. Stop the earlier Catan terminal with **Ctrl+C**, then retry `npm run dev`. You can choose a different unused backend port with `PORT=3002 npm run dev`; shell values override `.env`, and both proxies follow that port. Stop the development terminal with **Ctrl+C** to shut down both Catan processes.
 
 To run the built application through one server:
 
