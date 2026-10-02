@@ -14,7 +14,9 @@
     "format": "prettier --write .",
     "test:rankings": "npm run build && node --import tsx server/rankings.smoke.ts && playwright test --config=playwright.rankings.config.ts",
     "rankings:import": "node --env-file-if-exists=.env --import tsx server/rankings-import.ts",
-    "test:firestore": "node --import tsx server/firestore.smoke.ts"
+    "test:firestore": "node --import tsx server/firestore.smoke.ts",
+    "test:online-http": "node --import tsx server/online.smoke.ts",
+    "test:online-browser": "VITE_ONLINE_TRANSPORT=http npm run build && playwright test --config=playwright.http.config.ts"
   },
   "dependencies": {
     "express": "^5.2.1",
