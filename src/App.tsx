@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Anchor,
   ArrowLeftRight,
@@ -32,7 +32,7 @@ import {
   WifiOff,
   X,
 } from 'lucide-react';
-import Board3D from './components/Board3D';
+import RankingsPage from './components/RankingsPage';
 import {
   applyAction,
   createGame,
@@ -47,6 +47,8 @@ import {
 import type { BuildKind, DevType, GameAction, GameState, Resource, Resources } from './game/types';
 import { CatanConnection, loadSession } from './network';
 import type { RoomSnapshot } from './network';
+
+const Board3D = lazy(() => import('./components/Board3D'));
 
 const RESOURCE_LABELS: Record<Resource, string> = {
   wood: 'Lumber',
@@ -495,6 +497,7 @@ function DiscardDialog({
 }
 
 export default function App() {
+  const [rankingsOpen, setRankingsOpen] = useState(() => location.hash === '#rankings');
   const [local, setLocal] = useState<GameState>(() => createGame(previewConfig));
   const [screen, setScreen] = useState<'welcome' | 'local' | 'online'>('welcome');
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
@@ -550,6 +553,12 @@ export default function App() {
       : game.board.hexes.find((h) => h.id !== game.robberHex)?.id;
   const canAct = isMyTurn && game.phase === 'action';
   const setup = game.phase.startsWith('setup');
+
+  useEffect(() => {
+    const update = () => setRankingsOpen(location.hash === '#rankings');
+    window.addEventListener('hashchange', update);
+    return () => window.removeEventListener('hashchange', update);
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -621,7 +630,12 @@ export default function App() {
   }, [game.dice, sound]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).matches('input,select,textarea') || dialog || handoff !== null)
+      if (
+        rankingsOpen ||
+        (e.target as HTMLElement).matches('input,select,textarea') ||
+        dialog ||
+        handoff !== null
+      )
         return;
       if (e.key === 'Escape') setBuild(null);
       if (canAct && ['1', '2', '3'].includes(e.key))
@@ -629,7 +643,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [canAct, dialog, handoff]);
+  }, [canAct, dialog, handoff, rankingsOpen]);
 
   async function dispatch(action: GameAction) {
     try {
@@ -740,6 +754,17 @@ export default function App() {
                     ? 'Your paired turn: build, trade with the bank, or play a development card.'
                     : 'Trade resources, expand your network, and build your way to 10 points.';
 
+  if (rankingsOpen) {
+    return (
+      <RankingsPage
+        onBack={() => {
+          location.hash = '';
+          setRankingsOpen(false);
+        }}
+      />
+    );
+  }
+
   return (
     <div className={`app ${playing ? 'in-game' : 'in-lobby'}`}>
       <header className="topbar">
@@ -777,6 +802,17 @@ export default function App() {
           )}
         </div>
         <div className="header-actions">
+          <button
+            className="help-button"
+            aria-label="Rankings"
+            onClick={() => {
+              location.hash = 'rankings';
+              setRankingsOpen(true);
+            }}
+          >
+            <Award size={17} />
+            <span>Rankings</span>
+          </button>
           {playing && (
             <span className="connection-chip">
               {screen === 'online' ? (
