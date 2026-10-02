@@ -550,7 +550,8 @@ class RestFirestore {
 /**
  * Narrow compatibility boundary for Catan's existing stores. This implements only
  * their documented document/query/transaction/batch operations, not the full Admin SDK.
- * All requests use Firebase ID tokens, so Firestore Security Rules remain authoritative.
+ * Google OAuth tokens use IAM authorization; Firebase ID tokens use Security Rules.
+ * The caller supplies the appropriate server identity; this adapter never grants access.
  */
 export function createFirestoreRest(options: FirestoreRestOptions): Firestore {
   return new RestFirestore(options) as unknown as Firestore;

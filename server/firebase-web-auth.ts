@@ -1,12 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import { deleteApp, initializeApp, type FirebaseOptions } from 'firebase/app';
-import {
-  connectAuthEmulator,
-  initializeAuth,
-  inMemoryPersistence,
-  signInWithEmailAndPassword,
-  type User,
-} from 'firebase/auth';
+import { getVercelOidcToken } from '@vercel/oidc';
+import type { FirebaseOptions } from 'firebase/app';
+import { ExternalAccountClient, type BaseExternalAccountClient } from 'google-auth-library';
 
 const PUBLIC_FIELDS = {
   apiKey: 'FIREBASE_API_KEY',
@@ -27,8 +21,8 @@ type RequiredWebOptions = FirebaseOptions & {
 };
 export interface WebAuthConfig {
   options: RequiredWebOptions;
-  backend: { email: string; password: string; uid: string };
-  authEmulatorHost?: string;
+  projectNumber: string;
+  workload: { audience: string; oidcAudience: string; serviceAccount: string };
   firestoreEmulatorHost?: string;
 }
 export interface WebAuth {
@@ -104,11 +98,14 @@ export function parseWebAuthConfig(env: NodeJS.ProcessEnv = process.env): WebAut
       'Set FIREBASE_AUTH_DOMAIN to the Firebase Console authDomain hostname, without a URL scheme.',
     );
   }
-  if (!options.appId || !/^1:[0-9]+:web:[a-zA-Z0-9]+$/.test(options.appId)) {
+  if (!options.appId || !/^1:[1-9][0-9]{0,19}:web:[a-zA-Z0-9]+$/.test(options.appId)) {
     throw new Error('Set FIREBASE_APP_ID to the Firebase Console web app ID.');
   }
-  if (options.messagingSenderId && !/^[0-9]+$/.test(options.messagingSenderId)) {
-    throw new Error('FIREBASE_MESSAGING_SENDER_ID must contain the Firebase messaging sender ID.');
+  const projectNumber = options.appId.split(':')[1];
+  if (options.messagingSenderId && options.messagingSenderId !== projectNumber) {
+    throw new Error(
+      'FIREBASE_MESSAGING_SENDER_ID must match the project number in FIREBASE_APP_ID.',
+    );
   }
   if (options.databaseURL) {
     try {
@@ -119,134 +116,146 @@ export function parseWebAuthConfig(env: NodeJS.ProcessEnv = process.env): WebAut
     }
   }
 
-  const email = env.FIREBASE_BACKEND_EMAIL?.trim();
-  const password = env.FIREBASE_BACKEND_PASSWORD;
-  const uid = env.FIREBASE_BACKEND_UID;
-  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new Error(
-      'Set FIREBASE_BACKEND_EMAIL to the dedicated Firebase Authentication account email.',
-    );
-  }
-  if (!password || password.length < 6 || password.length > 4_096) {
-    throw new Error(
-      'Set FIREBASE_BACKEND_PASSWORD to the dedicated account password (6–4,096 characters).',
-    );
-  }
-  if (!uid || uid !== uid.trim() || uid.length > 128 || /[\u0000-\u001f\u007f]/.test(uid)) {
-    throw new Error(
-      'Set FIREBASE_BACKEND_UID to the dedicated Firebase Authentication account UID.',
-    );
-  }
-  const authEmulatorHost = emulatorHost(env, 'FIREBASE_AUTH_EMULATOR_HOST');
   const firestoreEmulatorHost = emulatorHost(env, 'FIRESTORE_EMULATOR_HOST');
-  if ((authEmulatorHost !== undefined) !== (firestoreEmulatorHost !== undefined)) {
-    throw new Error(
-      'Configure both Firebase Auth and Firestore emulators together; mixing emulator and cloud services is disabled.',
-    );
+  // The old Auth emulator has no role in keyless Google identity. Reject an isolated
+  // Auth emulator to prevent a local test accidentally reaching cloud Firestore.
+  const authEmulatorHost = emulatorHost(env, 'FIREBASE_AUTH_EMULATOR_HOST');
+  if (authEmulatorHost && !firestoreEmulatorHost) {
+    throw new Error('Firebase Auth emulation cannot be mixed with cloud Firestore.');
   }
-  if (authEmulatorHost !== undefined) {
+  if (firestoreEmulatorHost !== undefined) {
     if (
       env.NODE_ENV === 'production' ||
       process.env.NODE_ENV === 'production' ||
+      env.VERCEL === '1' ||
+      process.env.VERCEL === '1' ||
       !options.projectId.startsWith('demo-')
     ) {
       throw new Error(
-        'Firebase emulators are allowed only outside production with a demo- project ID.',
+        'Firestore emulation is allowed only outside production and Vercel with a demo- project ID.',
       );
     }
   } else if (options.projectId.startsWith('demo-')) {
-    throw new Error('Demo Firebase projects require both Firebase Auth and Firestore emulators.');
+    throw new Error('Demo Firebase projects require a loopback Firestore emulator.');
   }
+  const provider = `iam.googleapis.com/projects/${projectNumber}/locations/global/workloadIdentityPools/catan-vercel/providers/vercel`;
   return {
     options: options as RequiredWebOptions,
-    backend: { email, password, uid },
-    authEmulatorHost,
+    projectNumber,
+    workload: {
+      audience: `//${provider}`,
+      oidcAudience: `https://${provider}`,
+      serviceAccount: `catan-api@${options.projectId}.iam.gserviceaccount.com`,
+    },
     firestoreEmulatorHost,
   };
 }
 
 const AUTH_FAILURE =
-  'Firebase backend authentication failed. Check the dedicated account, configured UID, and Firebase web configuration.';
+  'Firebase keyless authentication failed. Check Vercel OIDC and the Google Cloud workload identity setup.';
+const CLOSED = 'Firebase backend authentication has been closed.';
+const VERCEL_REQUIRED =
+  'Firebase keyless cloud access requires a Vercel runtime. Deploy to Vercel after the Google Cloud workload identity setup, or use a local demo Firestore emulator.';
+const AUTH_TIMEOUT_MS = 12_000;
 
-/** This identity belongs only to the trusted backend, never the browser owner sign-in. */
+function validBearer(value: unknown): value is string {
+  return (
+    typeof value === 'string' && value.length <= 16_384 && /^[A-Za-z0-9._~+/-]+=*$/.test(value)
+  );
+}
+
+/** Public Firebase identifiers select the project; only Vercel's verified workload may access it. */
 export function createWebAuth(env: NodeJS.ProcessEnv = process.env): WebAuth {
   const configuration = parseWebAuthConfig(env);
-  const { options, backend } = configuration;
-  let app: ReturnType<typeof initializeApp>;
-  try {
-    app = initializeApp(options, `catan-backend-${randomUUID()}`);
-  } catch {
-    throw new Error(AUTH_FAILURE);
-  }
-  let auth: ReturnType<typeof initializeAuth>;
-  try {
-    auth = initializeAuth(app, { persistence: inMemoryPersistence });
-    if (configuration.authEmulatorHost) {
-      connectAuthEmulator(auth, `http://${configuration.authEmulatorHost}`, {
-        disableWarnings: true,
-      });
-    }
-  } catch {
-    void deleteApp(app).catch(() => {});
-    throw new Error(AUTH_FAILURE);
-  }
-  let user: User | null = null;
+  const { options, workload, firestoreEmulatorHost } = configuration;
+  const onVercel = env.VERCEL === '1' || process.env.VERCEL === '1';
+  let client: BaseExternalAccountClient | undefined;
   let pending: Promise<string> | undefined;
-  let closing: Promise<void> | undefined;
+  let cancelPending: (() => void) | undefined;
   let closed = false;
 
+  function newClient(): BaseExternalAccountClient {
+    const initialized = ExternalAccountClient.fromJSON({
+      type: 'external_account',
+      audience: workload.audience,
+      subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+      token_url: 'https://sts.googleapis.com/v1/token',
+      service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${workload.serviceAccount}:generateAccessToken`,
+      scopes: ['https://www.googleapis.com/auth/datastore'],
+      // The whole operation below is additionally bounded because SDK-internal
+      // STS calls and Vercel's subject-token exchange use separate transports.
+      transporterOptions: { timeout: 5_000, retryConfig: { retry: 0 } },
+      subject_token_supplier: {
+        async getSubjectToken() {
+          if (closed || client !== initialized) throw new Error(AUTH_FAILURE);
+          // Always ask the SDK for the current trusted request identity. It handles
+          // subject-token rotation; browser-supplied headers are never read here.
+          const subject = await getVercelOidcToken({ audience: workload.oidcAudience });
+          if (closed || client !== initialized || !validBearer(subject)) {
+            throw new Error(AUTH_FAILURE);
+          }
+          return subject;
+        },
+      },
+    });
+    if (!initialized) throw new Error(AUTH_FAILURE);
+    return initialized;
+  }
+
   async function token(): Promise<string> {
+    let active: BaseExternalAccountClient | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let exchange: Promise<{ token?: string | null }> | undefined;
     try {
-      if (!user) {
-        const signedIn = await signInWithEmailAndPassword(auth, backend.email, backend.password);
-        if (signedIn.user.uid !== backend.uid) throw new Error();
-        user = signedIn.user;
+      active = client ??= newClient();
+      exchange = active.getAccessToken();
+      const cancelled = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(AUTH_FAILURE)), AUTH_TIMEOUT_MS);
+        cancelPending = () => reject(new Error(CLOSED));
+      });
+      const result = await Promise.race([exchange, cancelled]);
+      if (closed || client !== active || !validBearer(result.token)) {
+        throw new Error(AUTH_FAILURE);
       }
-      if (closed || user.uid !== backend.uid) throw new Error();
-      // The SDK refreshes expiring tokens; never cache a raw bearer token ourselves.
-      const result = await user.getIdTokenResult();
-      const claims = result.claims;
-      if (
-        closed ||
-        typeof result.token !== 'string' ||
-        !result.token ||
-        claims.aud !== options.projectId ||
-        claims.iss !== `https://securetoken.google.com/${options.projectId}` ||
-        claims.sub !== backend.uid ||
-        (claims.user_id !== undefined && claims.user_id !== backend.uid) ||
-        typeof claims.exp !== 'number' ||
-        !Number.isFinite(claims.exp) ||
-        claims.exp <= Date.now() / 1_000
-      )
-        throw new Error();
       return result.token;
     } catch {
-      user = null;
-      throw new Error(AUTH_FAILURE);
+      // An expired or failed identity can recover on the next request. A retired
+      // SDK client cannot supply or publish a token after timeout or shutdown.
+      if (client === active) client = undefined;
+      active?.setCredentials({});
+      if (active && exchange) {
+        const discarded = active;
+        void exchange
+          .then(
+            () => discarded.setCredentials({}),
+            () => discarded.setCredentials({}),
+          )
+          .catch(() => {});
+      }
+      throw new Error(closed ? CLOSED : AUTH_FAILURE);
+    } finally {
+      if (timer) clearTimeout(timer);
+      cancelPending = undefined;
     }
   }
+
   return {
     projectId: options.projectId,
     getToken() {
-      if (closed)
-        return Promise.reject(new Error('Firebase backend authentication has been closed.'));
+      if (closed) return Promise.reject(new Error(CLOSED));
+      if (firestoreEmulatorHost) return Promise.resolve('owner');
+      if (!onVercel) return Promise.reject(new Error(VERCEL_REQUIRED));
       pending ??= token().finally(() => {
         pending = undefined;
       });
       return pending;
     },
-    close() {
+    async close() {
       closed = true;
-      closing ??= (async () => {
-        await pending?.catch(() => {});
-        user = null;
-        try {
-          await deleteApp(app);
-        } catch {
-          throw new Error('Firebase backend authentication could not be closed.');
-        }
-      })();
-      return closing;
+      cancelPending?.();
+      await pending?.catch(() => {});
+      client?.setCredentials({});
+      client = undefined;
     },
   };
 }

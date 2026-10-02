@@ -37,7 +37,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });
-describe('ID-token Firestore REST facade', () => {
+describe('Authenticated Firestore REST facade', () => {
   it('uses bearer headers and encodes document path segments without query injection', async () => {
     const db = createFirestoreRest(config());
     const path = 'catan/path?mask=x#fragment';
