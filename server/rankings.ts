@@ -10,7 +10,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { emptyRankings, validateRankings, type RankingsData } from '../src/rankings/model';
+import { validateRankings, type RankingsData } from '../src/rankings/model';
+import { createRankingsStore } from './rankings-storage';
+import { RankingsConflictError, RankingsStorageError, type RankingsStore } from './rankings-store';
 
 interface Credentials {
   version: 1;
@@ -80,25 +82,25 @@ function matches(secret: string, credentials: Credentials): Promise<boolean> {
 export function rankingsRouter(dataDir: string): express.Router {
   const router = express.Router();
   const production = process.env.NODE_ENV === 'production';
-  const dataFile = path.join(dataDir, 'rankings.json');
   const credentialsFile = path.join(dataDir, 'rankings-admin.json');
-  let data: RankingsData = emptyRankings();
+  let store: RankingsStore;
   let credentials: Credentials | null = null;
   let unavailable: string | null = null;
   const sessions = new Map<string, Session>();
   const attempts = new Map<string, { count: number; reset: number }>();
   let pendingLogins = 0;
 
-  try {
-    if (existsSync(dataFile)) {
-      data = validateRankings(JSON.parse(readFileSync(dataFile, 'utf8')));
-      chmodSync(dataFile, 0o600);
-    }
-  } catch {
-    unavailable =
-      'The saved rankings could not be read. Restore or repair rankings.json before editing; the existing file has been preserved.';
-    console.error('Rankings are unavailable: the saved rankings file is invalid or unreadable.');
-  }
+  const storageReady = createRankingsStore(dataDir)
+    .then((value) => {
+      store = value;
+    })
+    .catch((error: unknown) => {
+      unavailable =
+        error instanceof RankingsStorageError
+          ? error.message
+          : 'Rankings storage could not be initialized. Check the server configuration.';
+      console.error('Rankings storage is unavailable. Check its server configuration.');
+    });
   try {
     if (process.env.RANKINGS_ADMIN_PASSWORD !== undefined) {
       credentials = makeCredentials(password(process.env.RANKINGS_ADMIN_PASSWORD));
@@ -110,6 +112,15 @@ export function rankingsRouter(dataDir: string): express.Router {
     unavailable ??=
       'Owner authentication is unavailable. Check RANKINGS_ADMIN_PASSWORD or restore rankings-admin.json; existing files have been preserved.';
     console.error('Rankings owner authentication is unavailable: check its configuration.');
+  }
+
+  function storageFailure(res: Response, error: unknown): void {
+    res.status(503).json({
+      error:
+        error instanceof RankingsStorageError
+          ? error.message
+          : 'The rankings store is unavailable. Check its connection and credentials, then retry. No local fallback has been used.',
+    });
   }
 
   function canSetup(req: Request): boolean {
@@ -141,9 +152,9 @@ export function rankingsRouter(dataDir: string): express.Router {
     const key = sessionKey(req);
     return !!key && sessions.has(key);
   }
-  function payload(req: Request): unknown {
+  async function payload(req: Request) {
     return {
-      data,
+      data: await store.read(),
       access: {
         authenticated: authenticated(req),
         configured: !!credentials,
@@ -151,7 +162,8 @@ export function rankingsRouter(dataDir: string): express.Router {
       },
     };
   }
-  function issueSession(req: Request, res: Response): void {
+  async function issueSession(req: Request, res: Response): Promise<void> {
+    const data = await store.read();
     const previous = sessionKey(req);
     if (previous) sessions.delete(previous);
     while (sessions.size >= 64) sessions.delete(sessions.keys().next().value!);
@@ -190,7 +202,8 @@ export function rankingsRouter(dataDir: string): express.Router {
     }
   }
 
-  router.use((_req, res, next) => {
+  router.use(async (_req, res, next) => {
+    await storageReady;
     res.set('Cache-Control', 'no-store');
     res.set('Vary', 'Cookie');
     res.set('X-Content-Type-Options', 'nosniff');
@@ -212,8 +225,14 @@ export function rankingsRouter(dataDir: string): express.Router {
   const ledgerJson = express.json({ limit: '16mb', strict: true });
   const authJson = express.json({ limit: '4kb', strict: true });
   router.use((req, res, next) => (req.method === 'PUT' ? ledgerJson : authJson)(req, res, next));
-  router.get('/', (req, res) => res.json(payload(req)));
-  router.post('/setup', (req, res) => {
+  router.get('/', async (req, res) => {
+    try {
+      res.json(await payload(req));
+    } catch (error) {
+      storageFailure(res, error);
+    }
+  });
+  router.post('/setup', async (req, res) => {
     if (!canSetup(req)) {
       return void res.status(403).json({
         error: credentials
@@ -231,7 +250,7 @@ export function rankingsRouter(dataDir: string): express.Router {
       const next = makeCredentials(secret);
       atomicJson(credentialsFile, next);
       credentials = next;
-      issueSession(req, res);
+      await issueSession(req, res);
     } catch {
       res.status(503).json({
         error: 'Could not save the owner password. Check the server data directory permissions.',
@@ -265,7 +284,7 @@ export function rankingsRouter(dataDir: string): express.Router {
         return void res.status(401).json({ error: 'The owner password is incorrect.' });
       }
       attempts.delete(address);
-      issueSession(req, res);
+      await issueSession(req, res);
     } catch {
       res
         .status(503)
@@ -274,7 +293,7 @@ export function rankingsRouter(dataDir: string): express.Router {
       pendingLogins--;
     }
   });
-  router.post('/logout', (req, res) => {
+  router.post('/logout', async (req, res) => {
     const key = sessionKey(req);
     if (key) sessions.delete(key);
     res.clearCookie(COOKIE, {
@@ -283,9 +302,13 @@ export function rankingsRouter(dataDir: string): express.Router {
       sameSite: 'strict',
       path: '/api/rankings',
     });
-    res.json(payload(req));
+    try {
+      res.json(await payload(req));
+    } catch (error) {
+      storageFailure(res, error);
+    }
   });
-  router.put('/', (req, res) => {
+  router.put('/', async (req, res) => {
     if (!authenticated(req))
       return void res.status(401).json({ error: 'Sign in as the owner to edit rankings.' });
     let next: RankingsData;
@@ -294,21 +317,20 @@ export function rankingsRouter(dataDir: string): express.Router {
     } catch (error) {
       return void res.status(400).json({ error: (error as Error).message });
     }
-    if (next.revision !== data.revision) {
-      return void res.status(409).json({
-        error: 'Rankings changed in another tab. Reload the latest records before saving.',
-      });
-    }
-    next.revision = data.revision + 1;
     try {
-      atomicJson(dataFile, next);
-      data = next;
-      res.json(payload(req));
-    } catch {
-      res.status(503).json({
-        error:
-          'Could not save rankings. Your changes were not applied; check the server data directory permissions.',
+      const data = await store.save(next);
+      res.json({
+        data,
+        access: {
+          authenticated: authenticated(req),
+          configured: !!credentials,
+          canSetup: canSetup(req),
+        },
       });
+    } catch (error) {
+      if (error instanceof RankingsConflictError)
+        return void res.status(409).json({ error: error.message });
+      storageFailure(res, error);
     }
   });
   router.use((error: unknown, _req: Request, res: Response, _next: express.NextFunction) => {
