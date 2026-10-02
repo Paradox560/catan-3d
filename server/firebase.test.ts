@@ -13,6 +13,74 @@ const configured = {
 beforeEach(() => {
   vi.stubEnv('NODE_ENV', 'test');
   vi.stubEnv('FIRESTORE_EMULATOR_HOST', undefined);
+  vi.stubEnv('FIREBASE_AUTH_EMULATOR_HOST', undefined);
+});
+
+describe('Web-config Firestore factory', () => {
+  const web = {
+    ...configured,
+    FIREBASE_API_KEY: 'isolated-test-api-key',
+    FIREBASE_PROJECT_ID: 'demo-catan-web',
+    FIREBASE_AUTH_DOMAIN: 'demo-catan-web.firebaseapp.com',
+    FIREBASE_APP_ID: '1:123456:web:abcdef123456',
+    FIREBASE_BACKEND_EMAIL: 'backend@example.invalid',
+    FIREBASE_BACKEND_PASSWORD: 'isolated-backend-password',
+    FIREBASE_BACKEND_UID: 'catan-test-backend',
+    FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
+    FIRESTORE_EMULATOR_HOST: '127.0.0.1:8181',
+  };
+
+  it('selects web authentication without a service-account credential', async () => {
+    const connection = createRankingsFirestore(web);
+    expect(connection.documentPath).toBe('catan/rankings');
+    expect(connection.firestore.doc('catan/rankings').path).toBe('catan/rankings');
+    await Promise.all([connection.close(), connection.close()]);
+  });
+
+  it('accepts the Console web config as one JSON variable', async () => {
+    const {
+      FIREBASE_API_KEY,
+      FIREBASE_AUTH_DOMAIN,
+      FIREBASE_PROJECT_ID,
+      FIREBASE_APP_ID,
+      ...rest
+    } = web;
+    const connection = createRankingsFirestore({
+      ...rest,
+      FIREBASE_CONFIG: JSON.stringify({
+        apiKey: FIREBASE_API_KEY,
+        authDomain: FIREBASE_AUTH_DOMAIN,
+        projectId: FIREBASE_PROJECT_ID,
+        appId: FIREBASE_APP_ID,
+      }),
+    });
+    expect(connection.documentPath).toBe('catan/rankings');
+    await connection.close();
+  });
+
+  it.each(['FIREBASE_SERVICE_ACCOUNT_JSON', 'GOOGLE_APPLICATION_CREDENTIALS'])(
+    'rejects a leftover Admin source %s in web mode',
+    (source) => {
+      expect(() => createRankingsFirestore({ ...web, [source]: '' })).toThrow(
+        /Remove service-account/,
+      );
+    },
+  );
+
+  it('does not fall back to Admin when backend account settings are incomplete', () => {
+    expect(() => createRankingsFirestore({ ...web, FIREBASE_BACKEND_UID: undefined })).toThrow(
+      /FIREBASE_BACKEND_UID/,
+    );
+    expect(() => createRankingsFirestore({ ...configured, FIREBASE_AUTH_MODE: 'web' })).toThrow(
+      /FIREBASE_API_KEY/,
+    );
+  });
+
+  it('rejects an unknown authentication mode', () => {
+    expect(() => createRankingsFirestore({ ...web, FIREBASE_AUTH_MODE: 'unknown' })).toThrow(
+      /FIREBASE_AUTH_MODE/,
+    );
+  });
 });
 afterEach(() => vi.unstubAllEnvs());
 
