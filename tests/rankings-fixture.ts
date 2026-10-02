@@ -25,6 +25,7 @@ export const test = base.extend<{ rankingsURL: string }>({
       cwd: root,
       env: {
         ...environment,
+        RANKINGS_STORAGE: 'file',
         PORT: String(port),
         NODE_ENV: 'test',
         CATAN_DATA_DIR: directory,

@@ -31,6 +31,7 @@ async function start(options: { production?: boolean; password?: string } = {}):
   output = '';
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
+    RANKINGS_STORAGE: 'file',
     PORT: String(port),
     CATAN_DATA_DIR: dataDir,
     NODE_ENV: production ? 'production' : 'development',
