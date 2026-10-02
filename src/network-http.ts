@@ -79,9 +79,11 @@ export class HttpCatanConnection {
     if (state.code === this.current?.code && (state.revision ?? 0) < (this.current.revision ?? 0))
       return;
     const fingerprint = JSON.stringify(state);
+    const wasConnected = this.connected;
     this.current = state;
     this.setConnected(true);
-    if (fingerprint === this.lastPublished) return;
+    // App restores controls through onState after onDisconnect, even if no one moved.
+    if (wasConnected && fingerprint === this.lastPublished) return;
     this.lastPublished = fingerprint;
     this.subscribers.forEach((fn) => fn(state));
   }

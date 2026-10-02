@@ -57,6 +57,22 @@ describe('HTTP room connection', () => {
     expect(fetchMock.mock.calls[1][0]).not.toContain(session.token);
     expect(states).toHaveBeenCalledTimes(1); // Identical snapshots do not redraw the 3D scene.
   });
+  it('publishes an unchanged snapshot after a transient failure so game controls reconnect', async () => {
+    const states = vi.fn();
+    const disconnected = vi.fn();
+    connection.onState(states);
+    connection.onDisconnect(disconnected);
+    await connection.create({ name: 'Ada', mode: 'standard', capacity: 3 });
+    fetchMock.mockRejectedValueOnce(new TypeError('Network unavailable'));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(disconnected).toHaveBeenCalledTimes(1);
+    expect(states).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(states).toHaveBeenCalledTimes(2);
+    expect(states.mock.lastCall?.[0]).toEqual(snapshot());
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(states).toHaveBeenCalledTimes(2);
+  });
   it('keeps one poll in flight and slows polling in hidden tabs', async () => {
     await connection.create({ name: 'Ada', mode: 'standard', capacity: 3 });
     let resolve!: (value: unknown) => void;
