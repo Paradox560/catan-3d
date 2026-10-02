@@ -1,5 +1,4 @@
 import { getApps, initializeApp, type FirebaseOptions } from 'firebase/app';
-import { browserSessionPersistence, getAuth, setPersistence, type Auth } from 'firebase/auth';
 import { getFirestore, type Firestore } from 'firebase/firestore';
 
 const CONFIG_FIELDS = {
@@ -59,12 +58,10 @@ export function parseFirebaseConfig(
 
 export interface FirebaseServices {
   db: Firestore;
-  auth: Auth;
-  ready?: Promise<void>;
 }
 let services: FirebaseServices | undefined;
 
-/** The ordinary Firebase browser SDK; the Firestore Rules decide what this client can do. */
+/** The browser Firebase SDK reads public rankings; owner actions use the server API. */
 export function getFirebaseServices(): FirebaseServices {
   if (services) return services;
   const config = parseFirebaseConfig();
@@ -72,10 +69,6 @@ export function getFirebaseServices(): FirebaseServices {
     getApps().find((entry) => entry.name === 'catan-rankings-browser') ??
     initializeApp(config, 'catan-rankings-browser');
   const db = getFirestore(app);
-  const auth = getAuth(app);
-  const ready = setPersistence(auth, browserSessionPersistence).then(() => auth.authStateReady());
-  // Avoid an unhandled rejection if the caller only subscribes while initialization fails.
-  void ready.catch(() => {});
-  services = { db, auth, ready };
+  services = { db };
   return services;
 }

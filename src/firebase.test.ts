@@ -3,18 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const sdk = vi.hoisted(() => ({
   getApps: vi.fn(),
   initializeApp: vi.fn(),
-  getAuth: vi.fn(),
   getFirestore: vi.fn(),
-  setPersistence: vi.fn(),
-  authStateReady: vi.fn(),
-  session: { type: 'SESSION' },
 }));
 vi.mock('firebase/app', () => ({ getApps: sdk.getApps, initializeApp: sdk.initializeApp }));
-vi.mock('firebase/auth', () => ({
-  getAuth: sdk.getAuth,
-  setPersistence: sdk.setPersistence,
-  browserSessionPersistence: sdk.session,
-}));
+vi.mock('firebase/auth', () => {
+  throw new Error('Public rankings must not initialize Firebase Authentication.');
+});
 vi.mock('firebase/firestore', () => ({ getFirestore: sdk.getFirestore }));
 import { parseFirebaseConfig } from './firebase';
 const config = {
@@ -28,9 +22,6 @@ beforeEach(() => {
   sdk.getApps.mockReturnValue([]);
   sdk.initializeApp.mockReturnValue({ name: 'catan-rankings-browser' });
   sdk.getFirestore.mockReturnValue({ name: 'firestore' });
-  sdk.getAuth.mockReturnValue({ authStateReady: sdk.authStateReady });
-  sdk.setPersistence.mockResolvedValue(undefined);
-  sdk.authStateReady.mockResolvedValue(undefined);
 });
 
 describe('standard public Firebase browser configuration', () => {
@@ -74,18 +65,16 @@ describe('standard public Firebase browser configuration', () => {
       'Set the Firebase web app configuration in Vercel and redeploy to connect the shared rankings.',
     );
   });
-  it('initializes once using session persistence before exposing ready authentication', async () => {
+  it('initializes only the public Firebase app and Firestore once', async () => {
     vi.resetModules();
     for (const [key, value] of Object.entries(config)) vi.stubEnv(key, value);
     const { getFirebaseServices } = await import('./firebase');
     expect(sdk.initializeApp).not.toHaveBeenCalled();
     const first = getFirebaseServices();
     expect(getFirebaseServices()).toBe(first);
-    await first.ready;
     expect(sdk.initializeApp).toHaveBeenCalledOnce();
     expect(sdk.getFirestore).toHaveBeenCalledOnce();
-    expect(sdk.setPersistence).toHaveBeenCalledWith(first.auth, sdk.session);
-    expect(sdk.authStateReady).toHaveBeenCalledOnce();
+    expect(Object.keys(first)).toEqual(['db']);
     vi.unstubAllEnvs();
   });
 });
