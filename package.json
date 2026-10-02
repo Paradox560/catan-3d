@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
+    "test:dev": "node --test scripts/dev.test.mjs",
     "start": "node --env-file-if-exists=.env --import tsx server/index.ts",
     "test:server": "node --import tsx server/smoke.ts",
     "test:e2e": "playwright test",
