@@ -2,13 +2,17 @@
 
 The **Rankings** page is a public ledger of your group's games. Anyone who can open the site can read it. Only the owner can add or rename players and add, edit or delete recorded games.
 
-Players rank by **total victory points across every recorded game**. Equal totals share a rank. Players with no games appear without a rank. Editing an old game recalculates the standings.
+Players rank by **total victory points across the selected games**. With no date filter, every recorded game counts. Equal totals share a rank. Players with no games appear without a rank. Editing an old game recalculates the standings.
+
+The final standings column is **Wins**, replacing Best. Each game's highest positive VP score earns a win; if players tie for that score, each receives a win. A game in which every player scores zero awards no wins. Wins are displayed separately and do not change ranking by total VP.
+
+Use **From date** and **To date** to filter the summary statistics, standings and game chronicle. Both endpoints are inclusive, and either endpoint can be left empty. **All dates** clears the range. While a date filter is active, only players with games in that range appear, and their totals and wins include only those games. An invalid range shows an error until corrected. Filters only change the view; they never alter saved players or game records.
 
 Each game records a date, two to six players, optional notes and each player's VP breakdown. Enter settlements, cities and victory point cards; mark Longest Road and Largest Army; use Other VP for house rules or corrections. The total is settlements + twice the cities + victory point cards + two for each award + other VP. These are manual records and can include tabletop games. Live rooms do not automatically change rankings.
 
 ## Owner access
 
-Set `RANKINGS_ADMIN_USERNAME` and `RANKINGS_ADMIN_PASSWORD` as server Secrets in Vercel. Choose a password with at least ten characters. Open **Owner sign in** and enter that username/password. Follow [the setup guide](VERCEL.md) for the public Firebase config and private server credential.
+Set `RANKINGS_ADMIN_USERNAME` and `RANKINGS_ADMIN_PASSWORD` as server Secrets in Vercel. Choose any non-empty password, up to 1,024 UTF-8 bytes. Open **Owner sign in** and enter that username/password. Follow [the setup guide](VERCEL.md) for the public Firebase config and private server credential.
 
 The Catan API verifies the owner and issues a twelve-hour HTTP-only session cookie. Sign-in survives page reloads. **Lock editing** revokes the session. If a save needs a new login or conflicts with another edit, the draft remains available for review. There is no public owner-registration form.
 
