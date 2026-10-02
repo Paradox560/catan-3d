@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { request as httpRequest } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emptyBreakdown, emptyRankings, type RankingsData } from '../src/rankings/model';
@@ -13,6 +12,7 @@ const dataDir = mkdtempSync(path.join(tmpdir(), 'catan-rankings-test-'));
 const port = 41_000 + Math.floor(Math.random() * 8_000);
 const url = `http://127.0.0.1:${port}`;
 const endpoint = `${url}/api/rankings`;
+const username = 'test-owner-9723';
 const password = 'test-owner-password-9723';
 const productionPassword = 'test-hosted-owner-password-6472';
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -26,7 +26,9 @@ interface Payload {
   access: { authenticated: boolean; configured: boolean; canSetup: boolean };
   error?: string;
 }
-async function start(options: { production?: boolean; password?: string } = {}): Promise<void> {
+async function start(
+  options: { production?: boolean; username?: string | null; password?: string | null } = {},
+): Promise<void> {
   production = options.production ?? false;
   output = '';
   const environment: NodeJS.ProcessEnv = {
@@ -36,8 +38,10 @@ async function start(options: { production?: boolean; password?: string } = {}):
     CATAN_DATA_DIR: dataDir,
     NODE_ENV: production ? 'production' : 'development',
   };
+  delete environment.RANKINGS_ADMIN_USERNAME;
   delete environment.RANKINGS_ADMIN_PASSWORD;
-  if (options.password !== undefined) environment.RANKINGS_ADMIN_PASSWORD = options.password;
+  if (options.username !== null) environment.RANKINGS_ADMIN_USERNAME = options.username ?? username;
+  if (options.password !== null) environment.RANKINGS_ADMIN_PASSWORD = options.password ?? password;
   server = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
     cwd: ROOT,
     env: environment,
@@ -105,73 +109,81 @@ function remember(response: Response): void {
 }
 
 try {
+  // Old disk credentials can no longer grant access, and are preserved rather than deleted.
+  const legacyFile = path.join(dataDir, 'rankings-admin.json');
+  const legacyContents = '{"obsolete":"credentials are no longer read"}';
+  writeFileSync(legacyFile, legacyContents);
+  for (const configuration of [
+    { username: null, password: null },
+    { username: null },
+    { password: null },
+    { username: '' },
+    { password: 'short' },
+  ]) {
+    await start(configuration);
+    const publicResult = await request();
+    assert.equal(publicResult.response.status, 200);
+    assert.deepEqual(publicResult.value.data, emptyRankings());
+    assert.deepEqual(publicResult.value.access, {
+      authenticated: false,
+      configured: false,
+      canSetup: false,
+    });
+    assert.equal((await request('/setup', 'POST', { username, password })).response.status, 403);
+    assert.equal((await request('/login', 'POST', { username, password })).response.status, 409);
+    assert.equal((await request('', 'PUT', emptyRankings())).response.status, 401);
+    assert.equal(readFileSync(legacyFile, 'utf8'), legacyContents);
+    await stop();
+  }
+  rmSync(legacyFile);
   await start();
   let result = await request();
   assert.equal(result.response.status, 200);
-  assert.deepEqual(result.value.data, emptyRankings());
   assert.deepEqual(result.value.access, {
     authenticated: false,
-    configured: false,
-    canSetup: true,
+    configured: true,
+    canSetup: false,
   });
-  assert.equal((await request('', 'PUT', emptyRankings())).response.status, 401);
+  assert.equal((await request('/setup', 'POST', { username, password })).response.status, 403);
   assert.equal(
-    (await request('/setup', 'POST', { password }, { origin: 'https://untrusted.example' }))
-      .response.status,
+    (await request('/login', 'POST', { username, password }, { origin: null })).response.status,
     403,
   );
   assert.equal(
-    (await request('/setup', 'POST', { password }, { origin: null })).response.status,
+    (
+      await request(
+        '/login',
+        'POST',
+        { username, password },
+        { origin: 'https://untrusted.example' },
+      )
+    ).response.status,
     403,
   );
-  assert.equal(
-    (await request('/setup', 'POST', { password }, { forwarded: '203.0.113.10' })).response.status,
-    403,
-  );
-  const publicHost = await new Promise<Payload>((resolve, reject) => {
-    const call = httpRequest(endpoint, { headers: { Host: 'public.example' } }, (response) => {
-      let body = '';
-      response.on('data', (chunk) => {
-        body += String(chunk);
-      });
-      response.on('end', () => resolve(JSON.parse(body) as Payload));
-    });
-    call.on('error', reject);
-    call.end();
-  });
-  assert.equal(publicHost.access.canSetup, false, 'A public hostname cannot claim the owner role.');
-  assert.equal((await request('/setup', 'POST', { password: 'short' })).response.status, 400);
-  assert.equal((await request('/setup', 'POST', '{oops', { raw: true })).response.status, 400);
-  assert.equal(
-    (await request('/setup', 'POST', { password }, { forwarded: '127.0.0.1, 203.0.113.10' }))
-      .response.status,
-    403,
-    'A spoofed local prefix cannot hide a remote proxy source.',
-  );
+  assert.equal((await request('/login', 'POST', '{oops', { raw: true })).response.status, 400);
+  const wrongName = await request('/login', 'POST', { username: 'wrong-owner', password });
+  const wrongPassword = await request('/login', 'POST', { username, password: 'wrong-password' });
+  assert.equal(wrongName.response.status, 401);
+  assert.equal(wrongPassword.response.status, 401);
+  assert.equal(wrongName.value.error, wrongPassword.value.error);
+  assert.equal((await request('/login', 'POST', { password })).response.status, 401);
   result = await request(
-    '/setup',
+    '/login',
     'POST',
-    { password },
-    { origin: 'http://localhost:5173', forwarded: '::1, 127.0.0.1' },
+    { username, password },
+    { origin: 'http://localhost:5173' },
   );
-  assert.equal(result.response.status, 200, 'Vite local development origin can configure owner.');
+  assert.equal(result.response.status, 200, 'Vite local development origin can sign in.');
   remember(result.response);
   assert.equal(result.value.access.authenticated, true);
-  assert.equal(result.value.access.canSetup, false);
   assert.equal(
     (await request('', 'GET', undefined, { authenticated: true })).value.access.authenticated,
     true,
   );
-  assert.equal(
-    (await request()).value.access.authenticated,
-    false,
-    'The public view is unauthenticated.',
-  );
-  assert.equal((await request('/setup', 'POST', { password })).response.status, 403);
-  const credentials = readFileSync(path.join(dataDir, 'rankings-admin.json'), 'utf8');
-  assert.ok(!credentials.includes(password), 'The owner password is never stored in plaintext.');
-  assert.equal(statSync(path.join(dataDir, 'rankings-admin.json')).mode & 0o777, 0o600);
+  assert.equal((await request()).value.access.authenticated, false);
+  assert.equal(existsSync(legacyFile), false, 'No credential file is written.');
   assert.ok(!JSON.stringify(result.value).includes(password));
+  assert.ok(!JSON.stringify(result.value).includes(username));
 
   const ledger: RankingsData = {
     version: 1,
@@ -253,10 +265,10 @@ try {
     401,
   );
   assert.equal(
-    (await request('/login', 'POST', { password: 'incorrect-password' })).response.status,
+    (await request('/login', 'POST', { username, password: 'incorrect-password' })).response.status,
     401,
   );
-  result = await request('/login', 'POST', { password });
+  result = await request('/login', 'POST', { username, password });
   assert.equal(result.response.status, 200);
   remember(result.response);
   assert.notEqual(cookie, oldCookie);
@@ -272,17 +284,17 @@ try {
   assert.equal((await request('', 'PUT', deletion, { authenticated: true })).response.status, 401);
   for (let i = 0; i < 10; i++)
     assert.equal(
-      (await request('/login', 'POST', { password: 'incorrect-password' })).response.status,
+      (await request('/login', 'POST', { username, password: 'incorrect-password' })).response
+        .status,
       401,
     );
-  assert.equal((await request('/login', 'POST', { password })).response.status, 429);
+  assert.equal((await request('/login', 'POST', { username, password })).response.status, 429);
   console.info(
     'Rankings survive restarts; revoked sessions, wrong passwords, deletion, and login rate limits passed.',
   );
 
   await stop();
-  rmSync(path.join(dataDir, 'rankings-admin.json'));
-  await start({ production: true });
+  await start({ production: true, username: null, password: null });
   result = await request();
   assert.equal(result.value.access.canSetup, false);
   assert.equal(result.value.access.configured, false);
@@ -293,13 +305,13 @@ try {
   );
   await stop();
   await start({ production: true, password: productionPassword });
-  result = await request('/login', 'POST', { password: productionPassword });
+  result = await request('/login', 'POST', { username, password: productionPassword });
   assert.equal(result.response.status, 200);
   remember(result.response);
   assert.match(result.response.headers.get('set-cookie')!, /Secure/i);
   assert.equal(
-    (await request('/login', 'POST', { password: productionPassword }, { origin: url })).response
-      .status,
+    (await request('/login', 'POST', { username, password: productionPassword }, { origin: url }))
+      .response.status,
     403,
   );
   assert.equal(
@@ -317,7 +329,7 @@ try {
   writeFileSync(path.join(dataDir, 'rankings.json'), corrupt);
   await start();
   assert.equal((await request()).response.status, 503);
-  assert.equal((await request('/setup', 'POST', { password })).response.status, 503);
+  assert.equal((await request('/setup', 'POST', { password })).response.status, 403);
   assert.equal(
     readFileSync(path.join(dataDir, 'rankings.json'), 'utf8'),
     corrupt,
