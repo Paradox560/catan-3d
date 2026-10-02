@@ -1,8 +1,8 @@
 # Store Catan rankings in Firestore
 
-The rankings API can store its ledger in Cloud Firestore. The Node server uses Firebase Admin; the browser continues to read the public rankings API, and only the configured owner username and password authorize changes. Player names, recorded dates, notes, and VP breakdowns remain editable through the existing page.
+The rankings API stores its ledger in Cloud Firestore. The default deployment uses **Firebase web config plus a dedicated Firebase Authentication backend account**. The server obtains an ID token and sends Firestore REST requests authorized by Security Rules. No service-account JSON or private key is required in this mode. Visitors read the Catan API, and the configured website owner username and password authorize edits.
 
-The configured destination for this project is:
+The destination for this project is:
 
 | Setting             | Value                        |
 | ------------------- | ---------------------------- |
@@ -11,135 +11,115 @@ The configured destination for this project is:
 | Collection          | `catan`                      |
 | Rankings document   | `catan/rankings`             |
 
-`catan` is a collection, so the application uses `rankings` as its document name. Ledger metadata is stored at `catan/rankings`; player and game records live in its `players` and `games` subcollections. Do not paste or manually construct the entire ledger in the Firebase console. Other documents in the collection are left alone. Vercel online room state also uses Firestore; the standard Node/Socket.IO transport still uses `CATAN_DATA_DIR/rooms.json`. Local pass-and-play remains in browser storage.
+`catan` is a collection, so the app uses `rankings` as its document name. Ledger metadata lives in that document; player and game records live in its `players` and `games` subcollections. Changing authentication mode does not move or recreate these records. Other documents in the collection are left alone.
 
-The same document is the root for private operational subcollections:
+The same root contains private operational subcollections:
 
 - `ownerSessions`: hashed owner-cookie identifiers, credential fingerprints, and expiry times.
-- `ownerRateLimits`: transactional owner login attempt limits shared across server instances.
-- `onlineRooms`: authoritative room state for Vercel's HTTP multiplayer transport, including hashed seat credentials.
-- `onlineLimits`: shared creation and command limits for HTTP rooms.
+- `ownerRateLimits`: owner sign-in attempt limits shared across server instances.
+- `onlineRooms`: authoritative room state for Vercel's HTTP transport, including hashed seat credentials and private hands.
+- `onlineLimits`: shared room creation and command limits.
 
-These private documents are never returned by the public rankings API. Owner credentials are not saved to Firestore. Player/game records have no automatic expiry; transient documents contain `expiresAt` timestamps, and the application enforces their expiry regardless of optional Firestore TTL cleanup.
+The public rankings API never returns these private documents. Plaintext owner and backend passwords are not saved in Firestore. Player/game records have no automatic expiry. Transient documents use `expiresAt` timestamps; the app enforces expiry even without optional Firestore TTL cleanup.
 
-## Credentials and owner access
+Vercel online rooms use Firestore. The standard Node/Socket.IO server continues to save rooms to `CATAN_DATA_DIR/rooms.json`, and local pass-and-play remains in browser storage.
 
-Firebase web configuration values such as `apiKey` do not authorize this backend. The server needs a Firebase Admin service identity. Use one of these options:
+## Authentication modes
 
-- On Google Cloud, assign a service account with Firestore access to the runtime and let Application Default Credentials use that identity.
-- On your computer or another host, provide the Firebase Admin service-account JSON file with `GOOGLE_APPLICATION_CREDENTIALS`.
-- If a host accepts environment secrets instead of files, store the complete downloaded JSON in `FIREBASE_SERVICE_ACCOUNT_JSON`.
+### Web config and Firebase Authentication
 
-For a key file, open **Project settings → Service accounts → Firebase Admin SDK** in the [Firebase project console](https://console.firebase.google.com/project/inventory-management-6626b/settings/serviceaccounts/adminsdk), generate a private key, and save the downloaded JSON outside this repository. Set the runtime variable to that file's absolute path. Use a dedicated service account with the access the app needs; a service account with Cloud Datastore User access can read and write Firestore. See [Firebase Admin setup](https://firebase.google.com/docs/admin/setup) and [Firestore IAM access control](https://cloud.google.com/firestore/native/docs/security/iam).
+Select `FIREBASE_AUTH_MODE=web`. Follow the [one-time Firebase account and rules setup](VERCEL.md#one-time-firebase-setup), then configure the [listed web fields and backend account variables](VERCEL.md#vercel-environment-variables). The Firebase Console web config identifies your app; the dedicated Email/Password backend account and its exact UID authorize database access.
 
-Keep the JSON, private key, and owner credentials in private files or your hosting provider's secret manager. Never put them in `VITE_` variables, frontend source, Git, or chat. The repository and Docker ignore common service-account filenames as an additional guard. The server checks that a supplied service-account key belongs to the configured Firebase project. Supply either the JSON secret or the file variable, not both.
+The backend requires `FIREBASE_BACKEND_EMAIL`, `FIREBASE_BACKEND_PASSWORD`, and `FIREBASE_BACKEND_UID`. Its password is a server-only secret. Use an account separate from the website owner login. Firebase API keys do not replace this account or Firestore Rules. The app checks the configured UID and token project, and never creates a user or changes rules automatically.
 
-Set both `RANKINGS_ADMIN_USERNAME` and `RANKINGS_ADMIN_PASSWORD` as private server environment variables. Choose your own username and a password of at least ten characters. The environment variables are the only owner identity: local password files and website setup are retired. If either variable is missing or invalid, public rankings remain readable when Firestore is configured, and editing stays disabled. Firebase Authentication setup is not needed for this app's owner login.
+Supply the web config as individual fields or the `FIREBASE_CONFIG` JSON alternative described in the deployment guide. Do not mix those sources. Remove `FIREBASE_SERVICE_ACCOUNT_JSON` and `GOOGLE_APPLICATION_CREDENTIALS` in web mode. An invalid web configuration or failed sign-in returns an error; it never falls back to Admin credentials or local files.
 
-In Firestore mode, owner sessions and login rate limits are shared across instances. Cookies remain valid for twelve hours across cold starts and redeployments when credentials stay the same. Changing either variable and redeploying invalidates prior cookies on the new deployment; signing out revokes the session everywhere. See [owner access details](RANKINGS.md).
+The backend caches sign-in and refreshes ID tokens through Firebase Authentication. Database operations retain transactional document/query reads, atomic commits, and optimistic revision checks. Only confirmed Firestore concurrency aborts are retried; an uncertain commit is not replayed automatically.
+
+### Legacy Admin SDK
+
+Existing deployments may explicitly select `FIREBASE_AUTH_MODE=admin`. When no authentication mode or web-mode fields are configured, an existing Admin configuration remains compatible. Use one credential source:
+
+- A Firebase Admin key file outside the repository, referenced by `GOOGLE_APPLICATION_CREDENTIALS`.
+- The complete downloaded service-account JSON in the private `FIREBASE_SERVICE_ACCOUNT_JSON` environment variable.
+- A Google-managed runtime identity through Application Default Credentials, with neither key variable set.
+
+Admin mode uses IAM and bypasses Firestore Security Rules. Limit the service identity to the Firestore access the app needs. A supplied key must belong to the configured project. See [Firebase Admin setup](https://firebase.google.com/docs/admin/setup) and [Firestore IAM access control](https://cloud.google.com/firestore/native/docs/security/iam).
+
+Keep private keys, backend passwords, and owner passwords out of Git, frontend source, and `VITE_` variables. A key file is needed only when intentionally using that legacy Admin option.
+
+## Website owner access
+
+Set `RANKINGS_ADMIN_USERNAME` and `RANKINGS_ADMIN_PASSWORD` as private server variables. Choose a password of at least ten characters. These credentials control the **Owner sign in** form; they are separate from the Firebase backend account. Missing or invalid owner values disable editing while configured public rankings remain readable.
+
+In Firestore mode, owner sessions and sign-in rate limits are shared across instances. Cookies last twelve hours across cold starts and redeployments when owner values stay the same. Changing either owner value and redeploying invalidates prior cookies on the new deployment; signing out revokes that session everywhere. See [owner access, scoring, and recovery](RANKINGS.md).
 
 ## Configure and run locally
 
-Copy `.env.example` to the ignored `.env` file and set:
+Complete the same [Firebase account and rules setup](VERCEL.md#one-time-firebase-setup) used for Vercel. Copy `.env.example` to the ignored `.env`, set `NODE_ENV=development` and `RANKINGS_STORAGE=firestore`, and fill its web config, backend account, document path, and owner settings. The destination remains `inventory-management-6626b` / `catan/rankings`. `FIRESTORE_DATABASE_ID` is optional and defaults to `(default)`.
 
-```dotenv
-NODE_ENV=development
-PORT=3001
-CATAN_DATA_DIR=./server/data
-RANKINGS_STORAGE=firestore
-FIREBASE_PROJECT_ID=inventory-management-6626b
-FIRESTORE_RANKINGS_DOCUMENT=catan/rankings
-FIRESTORE_DATABASE_ID=(default)
-GOOGLE_APPLICATION_CREDENTIALS=/absolute/private/path/firebase-service-account.json
-RANKINGS_ADMIN_USERNAME="your-chosen-owner-name"
-RANKINGS_ADMIN_PASSWORD="replace-with-your-private-password"
-```
+Leave `FIREBASE_AUTH_EMULATOR_HOST` and `FIRESTORE_EMULATOR_HOST` unset when connecting to the real database. Ensure that Firestore exists, Email/Password sign-in is enabled, the backend user exists, and its UID matches the published scoped rules.
 
-Use your own credential path, owner username, and password. With a named Firestore database, replace `(default)` with its actual database ID. Leave `FIRESTORE_EMULATOR_HOST` unset when connecting to the real database. Confirm the database already exists in the Firebase console and that the service account has access.
-
-If you already have recorded games, import them using the next section before making new records in Firestore. Otherwise build and start:
+If you already have recorded JSON games, import them before making new Firestore records. Otherwise build and start:
 
 ```sh
 npm run build
 npm start
 ```
 
-Stop the existing server on port 3001 before restarting it with the new configuration. Open [the rankings page](http://localhost:3001/#rankings), choose **Owner sign in**, and use the configured owner username and password. `npm start` and `npm run dev` load `.env` when it exists; variables already exported by your shell or hosting provider take precedence. Both owner variables must be set to enable editing; the site no longer offers first-time owner setup.
+Stop the existing server on port 3001 before restarting. Open [the rankings page](http://localhost:3001/#rankings), choose **Owner sign in**, and use the website owner variables. `npm start` and `npm run dev` load `.env`; shell or hosting variables take precedence.
 
-The storage choice is explicit: `RANKINGS_STORAGE=file` keeps the existing JSON implementation, and `firestore` uses the cloud database. A missing credential, invalid configuration, or unavailable database makes the rankings API report an error. It never quietly switches back to local files or overwrites your existing JSON ledger.
+`RANKINGS_STORAGE=file` retains local JSON storage without Firebase. `firestore` explicitly selects the remote database. Missing credentials, rejected rules, or an unavailable database return an error without overwriting local records or switching storage.
 
-## Import your existing rankings
+## Import existing rankings
 
-Keep a backup of `server/data/rankings.json`. The import command reads that file, validates the full ledger, and checks the configured Firestore destination. It previews the import by default. It does not change the source file and never imports owner credentials.
+Back up `server/data/rankings.json`. The importer reads and validates that file, then checks the configured Firestore destination. Preview is the default; the source file and owner credentials are never changed or imported.
 
-With the Firestore environment exported or configured in `.env`:
+With either supported Firestore authentication mode configured in `.env` or the environment:
 
 ```sh
 npm run rankings:import -- --file ./server/data/rankings.json
 npm run rankings:import -- --file ./server/data/rankings.json --apply
 ```
 
-Read the dry-run summary before using `--apply`. The import accepts only an empty destination and refuses to replace existing rankings. If someone records a game between preview and import, the final write detects that change and fails instead of overwriting it. After import, verify player totals and game details in the website and restart the server once to check persistence.
+Read the preview before using `--apply`. The destination must be empty. An existing ledger or a concurrent save makes the import fail instead of overwriting records. After importing, verify player totals and game details on the website, then restart to check persistence.
 
-The importer supports up to 449 players and games combined in a single atomic import. A larger ledger is rejected before any records are written; it needs a separate migration strategy. Normal edits write only the changed records and retain optimistic revision checks.
+A single import supports up to 449 combined players and games. A larger ledger is rejected before any write and needs a separate migration strategy. Ordinary edits write only changed records. The application currently transfers the complete ledger over HTTP, so a large archive needs pagination before reaching [Vercel's 4.5 MB payload ceiling](https://vercel.com/docs/functions/limitations).
 
 ## Deploy with Firestore
 
-For **Vercel**, use the checked-in configuration and [Vercel deployment guide](VERCEL.md). Supply these values through the project's environment settings:
+For **Vercel**, follow the [canonical deployment and environment guide](VERCEL.md). It lists web config fields, backend account values, owner credentials, and Firestore Rules setup. Redeploy after changing environment values. The frontend build selects HTTP multiplayer automatically, and rankings, sessions, limits, and rooms survive replacement of the function because they live in Firestore.
 
-| Variable                        | Value                                                 |
-| ------------------------------- | ----------------------------------------------------- |
-| `RANKINGS_STORAGE`              | `firestore`                                           |
-| `FIREBASE_PROJECT_ID`           | `inventory-management-6626b`                          |
-| `FIRESTORE_RANKINGS_DOCUMENT`   | `catan/rankings`                                      |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | Complete downloaded Firebase Admin JSON, kept private |
-| `RANKINGS_ADMIN_USERNAME`       | Your chosen owner username                            |
-| `RANKINGS_ADMIN_PASSWORD`       | Your chosen owner password, at least ten characters   |
+For **Render or another long-running Node host**, use the same web-mode Firebase and owner values and serve over HTTPS. The Render Blueprint defaults to web mode and prompts for the app fields, backend email/password/UID, and both owner values. On an existing Render service, update its environment settings manually. See [Render's secret configuration](https://render.com/docs/blueprint-spec#prompting-for-secret-values). Legacy Admin deployments can instead select `FIREBASE_AUTH_MODE=admin` and one of the credential sources above.
 
-`FIRESTORE_DATABASE_ID` is optional and defaults to `(default)`. Set the variables in each Vercel environment you use and redeploy after adding or changing them. The server uses the credentials at runtime; frontend assets never contain them. The Vercel build automatically selects HTTP rooms with `VITE_ONLINE_TRANSPORT=http`.
+The Node server's Socket.IO rooms still require one process and a persistent disk at `CATAN_DATA_DIR` to survive replacement. Firestore rankings and owner sessions are independent of that disk. Production owner cookies require HTTPS.
 
-Vercel's API uses short HTTP requests and polls room updates about every two seconds while the page is visible. Rankings, owner sessions, rate limits, and online room state survive function replacement because Firestore is the shared source of truth. No persistent function filesystem or WebSocket server is required.
-
-For **Render or another long-running Node host**, deploy the backend behind HTTPS and supply the same Firebase and owner variables. A secret file can alternatively be referenced with `GOOGLE_APPLICATION_CREDENTIALS`; supply only one service-account credential source. The Render Blueprint prompts for the JSON credential and both owner variables during initial creation. When updating an existing service, add secrets manually in its environment settings. See [Render's secret configuration](https://render.com/docs/blueprint-spec#prompting-for-secret-values).
-
-The standard Node server's Socket.IO rooms remain tied to one process and use local room files. Keep one instance for that transport and attach persistent storage at `CATAN_DATA_DIR` if active rooms must survive a replacement. Firestore-backed rankings and owner sessions are independent of that disk. Production owner cookies require HTTPS.
-
-Keep Firestore backups appropriate to your records. A persistent database protects against replacing the app deployment; an intentional deletion through the owner UI still deletes the record. Firestore use is subject to your project's quotas and billing plan. Rankings refreshes read ledger metadata and record documents; HTTP rooms read a room on each poll and periodically write presence updates.
+Keep database backups appropriate to your records: deployment persistence does not undo an intentional owner deletion. Firestore usage remains subject to project quotas and billing. Rankings read metadata and record documents; HTTP rooms read on each poll and occasionally update presence.
 
 ## Restrict direct client access
 
-All access for this app goes through the server. Browser clients do not need direct permission to read or write `catan/rankings` or any of its descendants, including owner sessions, rate limits, and online rooms. The Admin SDK uses IAM and bypasses Firestore Security Rules, so the app's server validates owner sessions and all edits. See [Firestore Security Rules structure](https://firebase.google.com/docs/firestore/security/rules-structure).
+In web mode, Firestore Rules must grant the dedicated backend UID access to `catan/rankings` and its descendants, while denying anonymous and unrelated Firebase users. Use the scoped match and setup instructions in [the deployment guide](VERCEL.md#one-time-firebase-setup) and [rules example](../firestore.rules.example). An unconditional deny would also block this web-mode backend.
 
-If your project's rules use version 2, a rule scoped to this document and its descendants can look like:
+Preserve other applications' rules when merging that match. Rules are additive: a broader matching allow still grants access, so a narrow deny cannot cancel it. Review broad `/{document=**}` permissions. The app never publishes rules automatically. See [Firestore Security Rules structure](https://firebase.google.com/docs/firestore/security/rules-structure).
 
-```text
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /catan/rankings/{document=**} {
-      allow read, write: if false;
-    }
-    // Preserve the rules needed by the other applications in this project.
-  }
-}
-```
-
-Merge the scoped rule into your existing rules after reviewing them. Do not replace unrelated inventory-management rules with this sample. If another matching rule allows access, its allow still wins; a scoped `false` does not override a broader allow. Review overlapping rules, especially a blanket `/{document=**}` allow. The app does not deploy or modify your Firebase rules automatically.
+With legacy Admin mode, Firestore Rules do not authorize the server; IAM does. Direct browser access can remain denied entirely in that mode. Visitors always use the Catan API for public rankings, owner editing, and legal game actions.
 
 ## Emulator verification
 
-Tests use a local Firestore emulator and a `demo-` project with no cloud resources. They do not use the real Firebase project, credentials, or rankings. The app refuses emulator configuration in production, a real project ID with an emulator host, and a demo project without an emulator host. Only loopback emulator addresses are accepted. See [Firebase emulator connection guidance](https://firebase.google.com/docs/emulator-suite/connect_firestore).
+Tests use loopback emulators and `demo-` projects with no cloud resources. Production rejects emulator configuration, and demo projects must use emulators. No tests use the real project, credentials, or rankings. See [Firebase emulator guidance](https://firebase.google.com/docs/emulator-suite/connect_firestore).
 
-With the Firebase CLI and its required Java runtime installed, start the isolated emulator:
+For **web mode**, start both Auth and Firestore using the [documented web-mode commands](VERCEL.md#verification), then run `npm run test:firebase-web` with the two emulator host variables. This exercises backend sign-in, token identity, scoped access rules, REST transactions, and persistence. Its test UID belongs only to the emulator fixture.
+
+For **legacy Admin mode**, start the separate Firestore-only emulator configuration:
 
 ```sh
 firebase emulators:start --only firestore --project demo-catan-rankings --config firebase.emulator.json
 ```
 
-In another terminal, run:
+In another terminal:
 
 ```sh
 FIRESTORE_EMULATOR_HOST=127.0.0.1:8181 npm run test:firestore
 ```
 
-The smoke test covers owner-only API writes, concurrent revisions, persistence across separate server instances, shared cookies and logout, credential rotation, expired sessions, distributed login limits, invalid stored records, credential failures, and preserving unrelated documents. The default `npm test` also covers configuration validation. Remove emulator variables before running the real server.
+The legacy suite covers owner-only API writes, concurrent revisions, restart persistence, shared sessions and logout, credential rotation, expiry, shared rate limits, corruption detection, and safe import. `npm test` also covers configuration validation, token handling, and REST transaction behavior. Remove emulator variables before starting the real server.
