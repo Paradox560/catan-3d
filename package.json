@@ -12,13 +12,16 @@
     "test:server": "node --import tsx server/smoke.ts",
     "test:e2e": "playwright test",
     "format": "prettier --write .",
-    "test:rankings": "npm run build && node --import tsx server/rankings.smoke.ts && playwright test --config=playwright.rankings.config.ts",
+    "test:rankings": "VITE_RANKINGS_TRANSPORT=http npm run build && node --import tsx server/rankings.smoke.ts && playwright test --config=playwright.rankings.config.ts",
     "rankings:import": "node --env-file-if-exists=.env --import tsx server/rankings-import.ts",
     "test:firestore": "node --import tsx server/firestore.smoke.ts",
     "test:online-http": "node --import tsx server/online.smoke.ts",
     "test:online-browser": "VITE_ONLINE_TRANSPORT=http npm run build && playwright test --config=playwright.http.config.ts",
     "test:firebase-web": "node --import tsx server/firebase-web.smoke.ts",
-    "test:firebase-setup": "node --test scripts/setup-vercel-firestore.test.mjs"
+    "test:firebase-setup": "node --test scripts/setup-vercel-firestore.test.mjs",
+    "firebase:browser:rules": "node scripts/prepare-browser-rules.mjs",
+    "test:firebase-browser": "node --import tsx tests/firebase-browser.smoke.ts",
+    "test:firebase-browser-ui": "playwright test --config=playwright.firebase.config.ts"
   },
   "dependencies": {
     "@vercel/oidc": "^3.8.9",
