@@ -25,7 +25,9 @@ export function rankingsRouter(dataDir: string): express.Router {
   const router = express.Router();
   const production = process.env.NODE_ENV === 'production';
   const credentials = ownerCredentials();
-  const distributed = process.env.RANKINGS_STORAGE === 'firestore';
+  const distributed =
+    (process.env.RANKINGS_STORAGE ?? (process.env.VERCEL === '1' ? 'firestore' : 'file')) ===
+    'firestore';
   let store: RankingsStore;
   let ownerAuth: OwnerAuthStore;
   let unavailable: string | null = null;
@@ -150,6 +152,21 @@ export function rankingsRouter(dataDir: string): express.Router {
   const ledgerJson = express.json({ limit: '16mb', strict: true });
   const authJson = express.json({ limit: '4kb', strict: true });
   router.use((req, res, next) => (req.method === 'PUT' ? ledgerJson : authJson)(req, res, next));
+  router.get('/access', async (req, res) => {
+    try {
+      res.json({
+        access: {
+          authenticated: await authenticated(req),
+          configured: !!credentials,
+          canSetup: false,
+        },
+      });
+    } catch {
+      res
+        .status(503)
+        .json({ error: 'Owner authentication is temporarily unavailable. Please try again.' });
+    }
+  });
   router.get('/', async (req, res) => {
     try {
       res.json(await payload(req));

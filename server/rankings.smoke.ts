@@ -144,6 +144,10 @@ try {
     configured: true,
     canSetup: false,
   });
+  const publicAccess = await request('/access');
+  assert.equal(publicAccess.response.status, 200);
+  assert.deepEqual(publicAccess.value, { access: result.value.access });
+  assert.equal(publicAccess.response.headers.get('cache-control'), 'no-store');
   assert.equal((await request('/setup', 'POST', { username, password })).response.status, 403);
   assert.equal(
     (await request('/login', 'POST', { username, password }, { origin: null })).response.status,
@@ -176,6 +180,11 @@ try {
   assert.equal(result.response.status, 200, 'Vite local development origin can sign in.');
   remember(result.response);
   assert.equal(result.value.access.authenticated, true);
+  assert.equal(
+    (await request('/access', 'GET', undefined, { authenticated: true })).value.access
+      .authenticated,
+    true,
+  );
   assert.equal(
     (await request('', 'GET', undefined, { authenticated: true })).value.access.authenticated,
     true,
@@ -281,6 +290,11 @@ try {
   assert.equal(result.value.data.revision, 3);
   result = await request('/logout', 'POST', {}, { authenticated: true });
   assert.equal(result.value.access.authenticated, false);
+  assert.equal(
+    (await request('/access', 'GET', undefined, { authenticated: true })).value.access
+      .authenticated,
+    false,
+  );
   assert.equal((await request('', 'PUT', deletion, { authenticated: true })).response.status, 401);
   for (let i = 0; i < 10; i++)
     assert.equal(

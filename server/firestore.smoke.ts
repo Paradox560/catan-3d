@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
-import { hashOwnerToken } from './owner-auth';
+import { hashOwnerToken, ownerCredentials } from './owner-auth';
 import { emptyBreakdown, emptyRankings, type RankingsData } from '../src/rankings/model';
 import { FirestoreRankingsStore } from './rankings-firestore';
 import { importRankings } from './rankings-import';
@@ -492,8 +492,20 @@ try {
 
   const ratePath = `catan/${id}-shared-auth`;
   ownedPaths.push(ratePath);
-  const authLeft = await start({ FIRESTORE_RANKINGS_DOCUMENT: ratePath });
+  const authLeft = await start({
+    FIRESTORE_RANKINGS_DOCUMENT: ratePath,
+    VERCEL: '1',
+    RANKINGS_STORAGE: undefined,
+  });
   const authRight = await start({ FIRESTORE_RANKINGS_DOCUMENT: ratePath });
+  const expectedOwner = ownerCredentials({
+    RANKINGS_ADMIN_USERNAME: username,
+    RANKINGS_ADMIN_PASSWORD: password,
+  })!;
+  const sharedLimit = firestore
+    .doc(ratePath)
+    .collection('ownerRateLimits')
+    .doc(hashOwnerToken(`${expectedOwner.fingerprint}:owner`));
   for (let attempt = 0; attempt < 10; attempt++) {
     const target = attempt % 2 === 0 ? authLeft : authRight;
     assert.equal(
@@ -501,7 +513,18 @@ try {
         .response.status,
       401,
     );
+    if (attempt === 0) {
+      const reservation = await sharedLimit.get();
+      assert.equal(
+        reservation.exists,
+        true,
+        'Vercel with unset RANKINGS_STORAGE must reserve the account-wide owner key, not a proxy socket address.',
+      );
+      assert.equal(reservation.get('count'), 1);
+      assert.equal((await sharedLimit.parent.get()).size, 1);
+    }
   }
+  assert.equal((await sharedLimit.get()).get('count'), 10);
   for (const target of [authLeft, authRight]) {
     const limited = await request(target, 'POST', { username, password }, false, '/login');
     assert.equal(

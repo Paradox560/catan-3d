@@ -1,5 +1,6 @@
 import express from 'express';
 import { onlineRouter } from '../server/online.js';
+import { rankingsRouter } from '../server/rankings.js';
 
 // Vercel invokes this app per request; it must not listen on a port or use local saves.
 const app = express();
@@ -9,16 +10,6 @@ if (process.env.VERCEL === '1') app.set('trust proxy', 1);
 app.get('/api/health', (_req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({ ok: true, service: 'catan-3d', hosting: 'vercel', transport: 'http' });
-});
-// Retire the server owner-password API; browser rankings use Firebase Auth + Rules.
-app.use('/api/rankings', (_req, res) => {
-  res.set('Cache-Control', 'no-store');
-  res
-    .status(410)
-    .json({
-      error:
-        'Rankings now connect directly to Firebase. Refresh the website to use the current version.',
-    });
 });
 app.use('/api', (_req, res, next) => {
   res.set('Cache-Control', 'no-store');
@@ -31,6 +22,9 @@ app.use('/api', (_req, res, next) => {
   next();
 });
 app.use('/api/online', onlineRouter());
+// Public browser reads use the Web SDK; owner actions use server-only credentials.
+// Vercel storage initialization rejects file storage, so this directory is never used.
+app.use('/api/rankings', rankingsRouter('/tmp/catan-vercel'));
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'API endpoint not found.' });
 });
