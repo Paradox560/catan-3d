@@ -54,9 +54,9 @@ Local play saves automatically in browser storage and hides the next player's ha
 
 Choose **Rankings** in the game header, or open `/#rankings`. Everyone can read the leaderboard and game chronicle. Players rank by **total victory points** across recorded games; equal totals share a rank.
 
-Set private server environment variables `RANKINGS_ADMIN_USERNAME` and `RANKINGS_ADMIN_PASSWORD` (at least ten password characters), restart locally or redeploy, and choose **Owner sign in**. Both values are required; website owner setup is retired. The owner can add or rename players and record, edit, or delete games with a date, two to six players, notes, and each player's VP breakdown. Totals calculate from settlements, cities, victory point cards, Longest Road, Largest Army, and optional other VP. Records are manual, so tabletop games can be included too.
+Enable Firebase Authentication Email/Password, configure your user UID in the Firestore rules, and choose **Owner sign in** with that user’s email/password. Browser rankings do not use owner credentials from environment variables. The owner can add or rename players and record, edit, or delete games with a date, two to six players, notes, and each player's VP breakdown. Totals calculate from settlements, cities, victory point cards, Longest Road, Largest Army, and optional other VP. Records are manual, so tabletop games can be included too.
 
-For a public deployment, use **Cloud Firestore**, set both private owner environment variables, and serve the app over HTTPS. On Vercel, the server uses the standard Firebase web config and its deployment identity to obtain short-lived Google access tokens. The one-time cloud permissions setup grants database access; no Firebase backend account or downloaded private key is required. Browser visitors do not receive the server tokens. The configured project is `inventory-management-6626b`, with ledger metadata at `catan/rankings` and player/game subcollections below it. Existing JSON records can be imported explicitly. See [Firestore setup and migration](docs/FIRESTORE.md) and [owner access, scoring, and recovery](docs/RANKINGS.md).
+For public rankings, use the **Firebase Web SDK** with your standard `VITE_FIREBASE_*` config, Firebase owner sign-in, and scoped Firestore rules. No backend Firebase account, service-account JSON, or Vercel IAM setup is needed for rankings. Existing records remain at `catan/rankings` and its player/game subcollections. See [setup and environment names](docs/VERCEL.md), [Firestore persistence](docs/FIRESTORE.md), and [scoring and owner access](docs/RANKINGS.md).
 
 Without Firestore configuration, local development retains file storage. `RANKINGS_STORAGE=firestore` selects the database explicitly and never falls back to files on a connection or credential error. Vercel online rooms and owner sessions also persist in Firestore. The standard Node/Socket.IO server retains file-backed rooms and needs a persistent disk for those rooms to survive deployments.
 
@@ -96,7 +96,7 @@ This implementation uses randomized variable boards and starts with the first li
 
 The checked-in `vercel.json` builds the frontend with HTTP multiplayer and serves `/api` through `api/index.ts`. Firestore holds rankings, owner sessions, and online rooms, so function instances share durable state. Players see room updates about every two seconds while the page is visible.
 
-Supply the standard Firebase web config (individual `FIREBASE_*` fields or one `FIREBASE_CONFIG` JSON object), plus `RANKINGS_ADMIN_USERNAME` / `RANKINGS_ADMIN_PASSWORD`, in Vercel's environment settings. Firestore storage and `catan/rankings` are automatic defaults. Complete the one-time Vercel deployment permissions setup in the [deployment guide](docs/VERCEL.md), then redeploy. No Firebase backend email, password, UID, or service-account JSON is needed.
+Supply the seven `VITE_FIREBASE_*` fields from Firebase Console in Vercel's Production environment, enable Firebase Authentication Email/Password, and configure your owner UID in the scoped rules. Follow the [rankings setup guide](docs/VERCEL.md), then redeploy. Online multiplayer retains its separate [trusted backend setup](docs/MULTIPLAYER_BACKEND.md).
 
 ## Deploy on Render
 
@@ -109,7 +109,7 @@ The included `Dockerfile` builds the frontend and runs one Node process. `render
 5. Once available, open the service's public HTTPS URL and verify that `/api/health` returns `{"ok":true,...}` and `/api/rankings` loads the expected records.
 6. Create a room and join from a separate browser/device before sharing the URL with your whole group.
 
-Render builds the image from the repository and starts the Dockerfile's command. See [Docker on Render](https://render.com/docs/docker) and [web service setup](https://render.com/docs/web-services).
+The Docker image explicitly builds the legacy HTTP rankings variant, preserving the existing Node/Render owner login. Vercel builds the browser Firebase variant. Render builds the image from the repository and starts the Dockerfile's command. See [Docker on Render](https://render.com/docs/docker) and [web service setup](https://render.com/docs/web-services).
 
 **For games that must survive host restarts and redeploys, configure persistence.** Render's default filesystem is ephemeral, and persistent disks require an eligible paid service. Select that plan yourself, attach a disk mounted at `/app/server/data`, and keep `CATAN_DATA_DIR=/app/server/data`. The commented `disk` block in `render.yaml` provides the same setup. Only data inside the mounted directory survives. A disk also affects deployment behavior; review [Render's disk documentation](https://render.com/docs/disks) before enabling one.
 
@@ -148,10 +148,10 @@ The container runs as the `node` user. Bind-mounted directories must be writable
 | `NODE_ENV`                | Unset                      | Use `production` on public deployments                                                       |
 | `CATAN_DATA_DIR`          | `<repository>/server/data` | Writable directory for Socket.IO room saves and file-backed rankings                         |
 | `ALLOWED_ORIGINS`         | Empty                      | Extra exact browser origins accepted by the socket server; same-origin requests already work |
-| `RANKINGS_ADMIN_USERNAME` | Unset                      | Private owner username; both owner variables are required to enable editing                  |
-| `RANKINGS_ADMIN_PASSWORD` | Unset                      | Private owner password for rankings; at least ten characters; configure as a hosting secret  |
+| `RANKINGS_ADMIN_USERNAME` | Unset                      | Legacy local HTTP rankings only: private owner username                                      |
+| `RANKINGS_ADMIN_PASSWORD` | Unset                      | Legacy local HTTP rankings only: private owner password, at least ten characters             |
 
-`RANKINGS_STORAGE=firestore` and `FIREBASE_AUTH_MODE=web` configure cloud rankings using the standard Firebase web config and Vercel deployment identity; these modes are selected automatically on Vercel when web config is present. See [all Firebase settings](docs/VERCEL.md#vercel-environment-variables). Legacy Admin SDK deployments can explicitly select `FIREBASE_AUTH_MODE=admin`; existing Admin configurations still work when no web-mode fields are present. See [Firestore authentication modes](docs/FIRESTORE.md#authentication-modes). `.env.example` documents these values. `npm start` and `npm run dev` load an ignored `.env` file when present; hosting or shell environment variables take precedence. To start the server directly after copying the example to `.env`:
+Browser rankings use the public `VITE_FIREBASE_*` fields in `.env.example`. These are compiled into the frontend; the owner password is never included. Existing local HTTP rankings can opt in with `VITE_RANKINGS_TRANSPORT=http` and retain `RANKINGS_STORAGE` and server owner credentials. Online rooms keep their server-only Firebase connection settings. `npm start` and `npm run dev` load an ignored `.env`; host and shell values take precedence. To start the server directly after copying the example to `.env`:
 
 ```sh
 node --env-file=.env --import tsx server/index.ts
@@ -217,10 +217,12 @@ src/components/RankingsPage.tsx  Public leaderboard, game records, and owner edi
 src/rankings/               VP model, standings, validation, and API client
 src/rankings.css            Medieval rankings layout and responsive dialogs
 server/index.ts             Rooms, authentication, privacy, persistence, hosting
-server/rankings.ts          Persistent ledger, owner authentication, and rankings API
+server/rankings.ts          Legacy local HTTP rankings API
 server/rankings-firestore.ts  Atomic cloud records and revision conflict checks
 server/firebase.ts          Firebase authentication mode and database configuration
-server/firebase-web-auth.ts  Standard Firebase config and keyless deployment authentication
+src/firebase.ts             Standard browser Firebase initialization
+src/rankings/firebase-client.ts  Firestore ledger and Firebase owner sign-in
+server/firebase-web-auth.ts  Existing multiplayer backend identity
 server/firestore-rest.ts     Authenticated Firestore transactions and document access
 server/rankings-import.ts   Explicit, non-overwriting import of existing JSON records
 server/owner-auth.ts        Environment owner identity and local sessions
