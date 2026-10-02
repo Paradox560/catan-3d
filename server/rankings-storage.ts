@@ -1,29 +1,39 @@
 import { FileRankingsStore, RankingsStorageError, type RankingsStore } from './rankings-store';
+import { MemoryOwnerAuthStore, type OwnerAuthStore } from './owner-auth';
 
 export async function createRankingsStore(directory: string): Promise<RankingsStore> {
+  return (await createRankingsServices(directory)).store;
+}
+
+export async function createRankingsServices(directory: string): Promise<{
+  store: RankingsStore;
+  ownerAuth: OwnerAuthStore;
+}> {
   const storage = process.env.RANKINGS_STORAGE ?? 'file';
-  if (storage === 'file') return new FileRankingsStore(directory);
+  if (storage === 'file')
+    return { store: new FileRankingsStore(directory), ownerAuth: new MemoryOwnerAuthStore() };
   if (storage !== 'firestore') {
     throw new RankingsStorageError(
       'RANKINGS_STORAGE must be file or firestore. No records have been changed.',
     );
   }
-  if (
-    process.env.NODE_ENV === 'production' &&
-    (!process.env.RANKINGS_ADMIN_PASSWORD || process.env.RANKINGS_ADMIN_PASSWORD.length < 10)
-  ) {
-    throw new RankingsStorageError(
-      'Set RANKINGS_ADMIN_PASSWORD to a private password of at least 10 characters before using Firestore in production.',
-    );
-  }
   try {
-    const [{ createRankingsFirestore }, { FirestoreRankingsStore }] = await Promise.all([
-      import('./firebase'),
-      import('./rankings-firestore'),
-    ]);
+    const [{ createRankingsFirestore }, { FirestoreRankingsStore }, { FirestoreOwnerAuthStore }] =
+      await Promise.all([
+        import('./firebase'),
+        import('./rankings-firestore'),
+        import('./owner-auth-firestore'),
+      ]);
     const connection = createRankingsFirestore();
     const store = new FirestoreRankingsStore(connection.firestore, connection.documentPath);
-    return { read: () => store.read(), save: (data) => store.save(data), close: connection.close };
+    return {
+      store: {
+        read: () => store.read(),
+        save: (data) => store.save(data),
+        close: connection.close,
+      },
+      ownerAuth: new FirestoreOwnerAuthStore(connection.firestore, connection.documentPath),
+    };
   } catch (error) {
     if (error instanceof RankingsStorageError) throw error;
     throw new RankingsStorageError(
