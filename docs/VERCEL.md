@@ -1,64 +1,62 @@
-# Deploy Catan on Vercel
+# Deploy Catan with Firebase web config
 
-This repository includes a Vercel deployment for the 3D frontend, shared rankings, owner editing, and online rooms. The linked project is **catan-3d** in **pranavs-projects-e233eba1**. Project linkage is local CLI metadata; it does not contain Firebase credentials and is excluded from Git.
+Production: [catan-3d-ebon.vercel.app](https://catan-3d-ebon.vercel.app). Repository: [Paradox560/catan-3d](https://github.com/Paradox560/catan-3d). Configure values in [Vercel environment settings](https://vercel.com/pranavs-projects-e233eba1/catan-3d/settings/environment-variables).
 
-Production: [catan-3d-ebon.vercel.app](https://catan-3d-ebon.vercel.app). Configure the deployment in [this project's environment settings](https://vercel.com/pranavs-projects-e233eba1/catan-3d/settings/environment-variables).
+Web mode uses the configuration from **Firebase Console → Project settings → Your apps → Web**. The backend signs in to Firebase Authentication and uses its ID token with Firestore's REST API. No service-account JSON or private key is required. Existing rankings records, owner login, and multiplayer behavior are preserved.
 
-## Environment variables to add
+The web config identifies the app; a dedicated Firebase Authentication account authorizes the backend. Its credentials and tokens stay on the server. Visitors use the Catan API, which enforces owner access, move legality, and private game hands. See [Firebase web config](https://firebase.google.com/docs/web/learn-more#config-object) and [Firestore REST authentication](https://firebase.google.com/docs/firestore/use-rest-api#authentication_and_authorization).
 
-In the Vercel project, open **Settings → Environment Variables**. Add these values to **Production**. Add them to **Preview** too if preview deployments should access the same records. Sharing a Firestore document means previews and production can edit the same ledger; use another document path when you want isolated preview records.
+## One-time Firebase setup
 
-| Name                            | Value to supply                                                                   |
-| ------------------------------- | --------------------------------------------------------------------------------- |
-| `RANKINGS_STORAGE`              | `firestore`                                                                       |
-| `FIREBASE_PROJECT_ID`           | `inventory-management-6626b`                                                      |
-| `FIRESTORE_RANKINGS_DOCUMENT`   | `catan/rankings`                                                                  |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | The complete contents of your downloaded Firebase Admin service-account JSON file |
-| `RANKINGS_ADMIN_USERNAME`       | Your chosen owner username                                                        |
-| `RANKINGS_ADMIN_PASSWORD`       | Your chosen private password, at least 10 characters                              |
+1. In `inventory-management-6626b`, enable **Authentication → Sign-in method → Email/Password**.
+2. Under **Authentication → Users**, create a dedicated backend user with an email and strong password. Copy its **UID**. Use credentials separate from the website owner login.
+3. In **Firestore Database → Rules**, merge this match into the existing `match /databases/{database}/documents` block. Use rules version 2 and replace the placeholder with that user's exact UID:
 
-`FIRESTORE_DATABASE_ID` is optional and defaults to `(default)`. Set it only if you use a named Firestore database. Owner usernames accept 1–128 characters without leading/trailing whitespace or control characters; passwords accept up to 1,024 UTF-8 bytes.
-
-Mark the service-account JSON and owner credentials as sensitive where Vercel offers that option. Paste the original JSON contents, including its private key, directly into Vercel's private environment value. It is not a Firebase web API key, a local file path, or a base64 string. Never put those values in `VITE_` variables or commit them. Do not set `GOOGLE_APPLICATION_CREDENTIALS` alongside the JSON secret, and leave `FIRESTORE_EMULATOR_HOST` unset on Vercel.
-
-No `PORT`, `CATAN_DATA_DIR`, `ALLOWED_ORIGINS`, or extra session secret is needed for this deployment. The public build option `VITE_ONLINE_TRANSPORT=http` is already set by `vercel.json`; it contains no credential.
-
-**Redeploy after adding or changing environment variables.** Existing deployments keep the environment they were created with. See [Vercel environment variables](https://vercel.com/docs/environment-variables) and [deployments](https://vercel.com/docs/deployments).
-
-## Deployment configuration
-
-`vercel.json` configures the Vite build, `dist` output, API routing, and no-cache API headers. The build command is:
-
-```sh
-VITE_ONLINE_TRANSPORT=http npm run build
+```text
+match /catan/rankings/{document=**} {
+  allow read, write: if request.auth != null
+    && request.auth.uid == 'REPLACE_WITH_BACKEND_UID';
+}
 ```
 
-The Node function in `api/index.ts` mounts the rankings and online-room Express routers. It does not start a listening server, write persistent state to the function filesystem, or need a WebSocket connection. Keep the project root set to this repository and retain the checked-in build configuration.
+This grants the backend account access to the ledger and its children. Preserve other applications' rules. Remove broader rules that grant other users access to this subtree: matching allows are additive. The [complete rules example](../firestore.rules.example) is a template, not a replacement for unrelated rules. Publish your reviewed rules in Firebase Console.
 
-Deploy from the linked Desktop repository with the Vercel CLI:
+The app does not create this account or publish rules automatically. It verifies the configured backend UID and token project before accessing Firestore. Anonymous clients and other Firebase users should have no direct access to these records. Everyone can still read rankings through the Catan API.
 
-```sh
-cd ~/Desktop/catan-3d
-npx vercel --prod
-```
+## Vercel environment variables
 
-You can also connect a Git remote to the project and deploy pushes through Vercel. A local Git repository or CLI project link alone does not establish automatic Git deployments.
+Set these for **Production**, then redeploy:
 
-A deployment without its Firebase settings still serves the frontend and local pass-and-play. Rankings and online rooms report that cloud storage is unavailable until those values are configured and the app is redeployed. When only owner credentials are missing, configured Firestore rankings remain public but editing is disabled.
+| Variable                      | Value                                                              |
+| ----------------------------- | ------------------------------------------------------------------ |
+| `RANKINGS_STORAGE`            | `firestore`                                                        |
+| `FIREBASE_AUTH_MODE`          | `web`                                                              |
+| `FIREBASE_API_KEY`            | Web config's `apiKey`                                              |
+| `FIREBASE_AUTH_DOMAIN`        | Web config's `authDomain`                                          |
+| `FIREBASE_PROJECT_ID`         | `inventory-management-6626b`                                       |
+| `FIREBASE_APP_ID`             | Web config's `appId`                                               |
+| `FIREBASE_BACKEND_EMAIL`      | Dedicated Firebase Authentication user's email                     |
+| `FIREBASE_BACKEND_PASSWORD`   | That user's password; keep sensitive                               |
+| `FIREBASE_BACKEND_UID`        | That user's exact UID                                              |
+| `FIRESTORE_RANKINGS_DOCUMENT` | `catan/rankings`                                                   |
+| `RANKINGS_ADMIN_USERNAME`     | Your chosen website owner username                                 |
+| `RANKINGS_ADMIN_PASSWORD`     | Your chosen owner password, at least 10 characters; keep sensitive |
 
-## Verify after deployment
+Optional config fields map to `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`, `FIREBASE_MEASUREMENT_ID`, and `FIREBASE_DATABASE_URL`. `FIRESTORE_DATABASE_ID` defaults to `(default)`.
 
-1. Open the production URL returned by Vercel. `/api/health` should identify the `catan-3d` service and `http` transport; this endpoint alone does not verify database access.
-2. Open `/#rankings` and confirm the expected public records load.
-3. Choose **Owner sign in** and enter your configured username and password. Record or edit a game only when you intend to change the shared ledger.
-4. Open the same URL in another browser profile. Rankings should be readable, with editing unavailable until owner sign-in.
-5. Host an online room and join it from a second browser or device. Confirm lobby updates and start after all required seats join.
+Alternatively, `FIREBASE_CONFIG` may contain the complete **web config** as valid JSON, replacing the individual public Firebase fields. Exclude JavaScript declarations, comments, and trailing semicolons. Backend account, owner settings, and document path still need separate variables. Do not mix JSON and individual public config sources.
 
-Owner cookies last twelve hours and work across function instances. Sessions are stored as hashed identifiers in Firestore. Sign-out revokes that cookie across instances, and changing either owner credential followed by a redeployment invalidates old sessions on the new deployment.
+Remove `FIREBASE_SERVICE_ACCOUNT_JSON` and `GOOGLE_APPLICATION_CREDENTIALS` in web mode. Never use `VITE_` prefixes for backend secrets. Leave emulator host variables unset on Vercel. The Firebase API key must permit server-side Firebase Authentication requests; browser-referrer-only restrictions prevent backend sign-in.
 
-## Storage and multiplayer behavior
+No `PORT`, persistent disk, or extra session secret is required. `vercel.json` already selects HTTP multiplayer. **Redeploy after changing variables**: existing deployments retain their previous environment. See [Vercel environment variables](https://vercel.com/docs/environment-variables).
 
-All hosted data uses the configured Firestore document as its root:
+For isolated Preview deployments, use a separate document path and matching rules. Preview and production URLs have separate cookies and room seat tokens.
+
+## Persistence and operation
+
+The frontend is served from `dist/`; `api/index.ts` mounts the Express APIs as a Vercel function. The backend caches Firebase sign-in per connection and obtains refreshed ID tokens through the SDK. Firestore transactions still protect coherent ledger reads, concurrent saves, online moves, and rate limits.
+
+All state remains under the configured root:
 
 ```text
 catan/rankings
@@ -70,33 +68,30 @@ catan/rankings
   onlineLimits/{hashedLimitKey}
 ```
 
-The parent document holds rankings metadata. Rankings writes use revision checks and transactions. Online rooms, hidden game state, seat-token hashes, presence, and room rate limits persist separately and are shared across function instances. Browser clients receive only the game information their seat may see.
+Owner sessions last twelve hours and work across instances. Sign-out revokes them; changing owner environment values and redeploying invalidates old cookies on the new deployment. The separate Firebase backend identity is used even when no owner is signed in, so public rankings and games remain available.
 
-Players poll room updates about every two seconds while the page is visible and every fifteen seconds while hidden. Presence is renewed about every thirty seconds; a seat is shown disconnected when its lease expires after seventy-five seconds. Rooms expire after seventy-two hours without activity. Cold starts can delay a request, and this transport incurs Firestore reads while players have a room open. Rankings remain manual and have no room expiry.
+Game tabs poll about every two seconds while visible and fifteen seconds while hidden. Presence renews about every thirty seconds, seats disconnect after seventy-five seconds without renewal, and rooms expire after seventy-two hours without activity. Firebase usage is subject to project quotas. Optional `expiresAt` TTL cleanup can remove expired transient documents; expiration is enforced without it.
 
-Optional Firestore TTL cleanup can target the `expiresAt` field in the transient `ownerSessions`, `ownerRateLimits`, `onlineRooms`, and `onlineLimits` collection groups. The app checks expiration itself, so cleanup is not required for correctness. Keep backups for permanent player and game records. See [Firestore storage and access](FIRESTORE.md).
+Local pass-and-play works without Firebase. The standard Node/Docker server still uses Socket.IO and local room saves; its rankings support either Firebase authentication mode. Legacy Admin SDK setups can select `FIREBASE_AUTH_MODE=admin`. Web-mode authentication errors never fall back to Admin credentials or local files.
 
-The standard `npm start` / Docker server continues to use Socket.IO for online play, with one Node process and persistent disk for its local room saves. It is a separate transport from Vercel's shared Firestore room API. Local pass-and-play always saves in that browser.
+Rankings currently exchange the complete ledger. Large archives must remain below [Vercel's payload limits](https://vercel.com/docs/functions/limitations); pagination is needed before reaching the 4.5 MB request/response ceiling.
 
-The rankings API currently exchanges the complete ledger. Large archives must stay below [Vercel's function payload limits](https://vercel.com/docs/functions/limitations); pagination will be needed before an archive approaches the 4.5 MB request/response ceiling.
-
-To verify hosted multiplayer behavior locally, start the isolated Firestore emulator described in [Firestore verification](FIRESTORE.md#emulator-verification), then run:
+Deploy from the linked repository:
 
 ```sh
-FIRESTORE_EMULATOR_HOST=127.0.0.1:8181 npm run test:online-http
-FIRESTORE_EMULATOR_HOST=127.0.0.1:8181 npm run test:online-browser
+cd ~/Desktop/catan-3d
+npx vercel@latest --prod
 ```
 
-These tests use isolated demo projects. The browser checks complete four- and six-player setup, reconnect a saved seat, and advance turns using the Vercel API entry point.
+## Verification
 
-## Troubleshooting
+After configuring Firebase and redeploying, open `/api/health`, load `/#rankings`, sign in through **Owner sign in**, and create/join an online table in separate browser profiles. Health confirms the function is running; reading rankings checks actual database access. Cloud features report a configuration error until the account, rules, and variables are ready.
 
-| Symptom                                        | Check                                                                                                                                          |
-| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Frontend loads but rankings/rooms fail         | Set all Firebase variables in the correct Vercel environment and redeploy. Check that the service account can access the selected database.    |
-| Rankings load but owner sign-in is unavailable | Set both `RANKINGS_ADMIN_USERNAME` and `RANKINGS_ADMIN_PASSWORD`, with a password of at least ten characters, then redeploy.                   |
-| Correct new credentials do not work            | Make sure you are opening the new production deployment, not an older preview with different environment values.                               |
-| Sign-in attempts are rate limited              | Wait for the shared fifteen-minute window to reset. Reloading or switching function instances does not reset it.                               |
-| A preview changes production rankings          | Both environments point at the same Firestore document. Configure a separate preview document and redeploy the preview if isolation is needed. |
-| Room updates arrive with a short delay         | Vercel rooms use HTTP polling; visible pages normally update about every two seconds.                                                          |
-| Sign-in works but another origin cannot save   | Open the frontend and API on the same HTTPS origin. The API does not allow cross-origin owner edits.                                           |
+For isolated web-config verification:
+
+```sh
+firebase emulators:start --only auth,firestore --project demo-catan-web --config firebase.web.emulator.json
+FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 FIRESTORE_EMULATOR_HOST=127.0.0.1:8181 npm run test:firebase-web
+```
+
+These tests allow only local emulators and demo projects. The UID in `tests/firestore.web.rules` is a test fixture and must not be used in production. Legacy Admin-mode emulator suites use the separate `firebase.emulator.json` configuration.
