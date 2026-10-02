@@ -37,7 +37,7 @@ export interface Standing {
   gamesPlayed: number;
   totalVP: number;
   averageVP: number;
-  bestVP: number;
+  wins: number;
   lastPlayed: string | null;
 }
 
@@ -181,22 +181,38 @@ export function validateRankings(input: unknown): RankingsData {
   return { version: 1, revision, players, games };
 }
 
+/** A view of games on or between the chosen calendar dates; never changes the saved ledger. */
+export function filterRankingsByDate(
+  data: RankingsData,
+  range: { from?: string; to?: string } = {},
+): RankingsData {
+  const from = range.from ? date(range.from, 'From date') : undefined;
+  const to = range.to ? date(range.to, 'To date') : undefined;
+  if (from && to && from > to) throw new Error('From date must be on or before To date.');
+  return {
+    ...data,
+    games: data.games.filter((game) => (!from || game.date >= from) && (!to || game.date <= to)),
+  };
+}
+
 /** Rank by accumulated victory points. Names only determine display order within a tie. */
 export function buildStandings(data: RankingsData): Standing[] {
   const standings = new Map<string, Standing>(
     data.players.map((player) => [
       player.id,
-      { player, rank: null, gamesPlayed: 0, totalVP: 0, averageVP: 0, bestVP: 0, lastPlayed: null },
+      { player, rank: null, gamesPlayed: 0, totalVP: 0, averageVP: 0, wins: 0, lastPlayed: null },
     ]),
   );
   for (const game of data.games) {
+    const highest = Math.max(0, ...game.results.map((result) => totalVP(result.breakdown)));
     for (const result of game.results) {
       const standing = standings.get(result.playerId);
       if (!standing) continue;
       const points = totalVP(result.breakdown);
       standing.gamesPlayed += 1;
       standing.totalVP += points;
-      standing.bestVP = Math.max(standing.bestVP, points);
+      // Tied positive leaders share a win; an all-zero score sheet awards none.
+      if (highest > 0 && points === highest) standing.wins += 1;
       if (standing.lastPlayed === null || game.date > standing.lastPlayed) {
         standing.lastPlayed = game.date;
       }

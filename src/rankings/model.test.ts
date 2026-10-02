@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildStandings, emptyBreakdown, emptyRankings, totalVP, validateRankings } from './model';
+import {
+  buildStandings,
+  emptyBreakdown,
+  emptyRankings,
+  filterRankingsByDate,
+  totalVP,
+  validateRankings,
+} from './model';
 import type { Breakdown, RankingsData } from './model';
 
 function fixture(): RankingsData {
@@ -60,7 +67,7 @@ describe('victory point standings', () => {
     ).toBe(16);
   });
 
-  it('ranks by total VP, including game count, mean, best result and latest calendar date', () => {
+  it('ranks by total VP, including game count, mean, wins and latest calendar date', () => {
     const data = fixture();
     // Input order has no bearing on the latest date or the rankings.
     data.games.reverse();
@@ -72,7 +79,7 @@ describe('victory point standings', () => {
         gamesPlayed: 2,
         totalVP: 17,
         averageVP: 8.5,
-        bestVP: 10,
+        wins: 1,
         lastPlayed: '2026-10-01',
       },
       {
@@ -80,11 +87,11 @@ describe('victory point standings', () => {
         gamesPlayed: 2,
         totalVP: 15,
         averageVP: 7.5,
-        bestVP: 10,
+        wins: 1,
         lastPlayed: '2026-10-01',
       },
-      { rank: 3, gamesPlayed: 1, totalVP: 6, averageVP: 6, bestVP: 6, lastPlayed: '2026-09-29' },
-      { rank: null, gamesPlayed: 0, totalVP: 0, averageVP: 0, bestVP: 0, lastPlayed: null },
+      { rank: 3, gamesPlayed: 1, totalVP: 6, averageVP: 6, wins: 0, lastPlayed: '2026-09-29' },
+      { rank: null, gamesPlayed: 0, totalVP: 0, averageVP: 0, wins: 0, lastPlayed: null },
     ]);
   });
 
@@ -97,6 +104,7 @@ describe('victory point standings', () => {
       player: { id: 'player-ada', name: 'Adelaide' },
       gamesPlayed: 2,
       totalVP: 20,
+      wins: 2,
     });
     data.games.splice(0, 1);
     expect(
@@ -112,7 +120,23 @@ describe('victory point standings', () => {
     ).toMatchObject({
       totalVP: 10,
       gamesPlayed: 1,
+      wins: 1,
     });
+  });
+
+  it('shares wins between tied positive leaders and excludes all-zero games', () => {
+    const data = fixture();
+    data.games[0].results[1].breakdown.other = 3;
+    expect(buildStandings(data).map((entry) => [entry.player.name, entry.wins])).toEqual([
+      ['Bea', 2],
+      ['Ada', 1],
+      ['Cam', 0],
+      ['Dan', 0],
+    ]);
+    data.games.forEach((game) =>
+      game.results.forEach((result) => (result.breakdown = emptyBreakdown())),
+    );
+    expect(buildStandings(data).every((entry) => entry.wins === 0)).toBe(true);
   });
 
   it('gives tied totals the same competition rank, independently of average or games played', () => {
@@ -155,6 +179,57 @@ describe('victory point standings', () => {
     const before = JSON.stringify(data);
     buildStandings(data);
     expect(JSON.stringify(data)).toBe(before);
+  });
+});
+
+describe('date range views', () => {
+  it('includes both boundary dates and permits either open end', () => {
+    const data = fixture();
+    expect(filterRankingsByDate(data, { from: '2026-09-29', to: '2026-10-01' }).games).toEqual(
+      data.games,
+    );
+    expect(filterRankingsByDate(data, { from: '2026-10-01' }).games.map((game) => game.id)).toEqual(
+      ['game-two'],
+    );
+    expect(filterRankingsByDate(data, { to: '2026-09-29' }).games.map((game) => game.id)).toEqual([
+      'game-one',
+    ]);
+    expect(
+      filterRankingsByDate(data, { from: '2026-10-01', to: '2026-10-01' }).games.map(
+        (game) => game.id,
+      ),
+    ).toEqual(['game-two']);
+    expect(filterRankingsByDate(data, { from: '', to: '' }).games).toEqual(data.games);
+  });
+
+  it('recomputes scores and wins while preserving the complete saved ledger and revision', () => {
+    const data = fixture();
+    const before = structuredClone(data);
+    const filtered = filterRankingsByDate(data, { to: '2026-09-29' });
+    expect(
+      buildStandings(filtered).map((entry) => [entry.player.name, entry.totalVP, entry.wins]),
+    ).toEqual([
+      ['Ada', 10, 1],
+      ['Bea', 7, 0],
+      ['Cam', 6, 0],
+      ['Dan', 0, 0],
+    ]);
+    expect(filtered.revision).toBe(data.revision);
+    expect(filtered.players).toEqual(data.players);
+    filtered.games.pop();
+    expect(data).toEqual(before);
+    expect(filterRankingsByDate(data, { from: '2027-01-01' }).games).toEqual([]);
+  });
+
+  it('rejects reversed and impossible calendar date ranges', () => {
+    const data = fixture();
+    expect(() => filterRankingsByDate(data, { from: '2026-10-01', to: '2026-09-29' })).toThrow(
+      'From date must be on or before To date.',
+    );
+    for (const from of ['2026-02-29', '2026-13-01', 'October 1', '0000-01-01']) {
+      expect(() => filterRankingsByDate(data, { from })).toThrow(/From date/);
+    }
+    expect(() => filterRankingsByDate(data, { to: '2026-02-30' })).toThrow(/To date/);
   });
 });
 

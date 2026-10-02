@@ -21,6 +21,7 @@ import {
 import {
   buildStandings,
   emptyBreakdown,
+  filterRankingsByDate,
   totalVP,
   validateRankings,
   type Breakdown,
@@ -166,21 +167,53 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
   const [conflict, setConflict] = useState<Reply | null>(null);
   const [needsReview, setNeedsReview] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const data = reply?.data;
   const owner = reply?.access.authenticated ?? false;
-  const standings = useMemo(() => (data ? buildStandings(data) : []), [data]);
+  const rangeActive = Boolean(fromDate || toDate);
+  // The filtered copy is for presentation only. Owner actions below continue to
+  // read and save the complete reply.data, including games outside this range.
+  const filtered = useMemo(() => {
+    if (!data) return { data: null, error: '' };
+    try {
+      return {
+        data: filterRankingsByDate(data, { from: fromDate || undefined, to: toDate || undefined }),
+        error: '',
+      };
+    } catch (error) {
+      return { data: null, error: errorMessage(error) };
+    }
+  }, [data, fromDate, toDate]);
+  const standings = useMemo(
+    () =>
+      filtered.data
+        ? buildStandings(filtered.data).filter((entry) => !rangeActive || entry.gamesPlayed > 0)
+        : [],
+    [filtered.data, rangeActive],
+  );
   const games = useMemo(
     () =>
-      data
-        ? [...data.games].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id))
+      filtered.data
+        ? [...filtered.data.games].sort(
+            (a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id),
+          )
         : [],
-    [data],
+    [filtered.data],
   );
   const totalPoints = standings.reduce((sum, entry) => sum + entry.totalVP, 0);
   const playersById = useMemo(
     () => new Map(data?.players.map((player) => [player.id, player]) ?? []),
     [data],
   );
+  const rangeDescription =
+    fromDate && toDate
+      ? `${formatDate(fromDate)} to ${formatDate(toDate)} · both dates included`
+      : fromDate
+        ? `From ${formatDate(fromDate)} onward`
+        : toDate
+          ? `Through ${formatDate(toDate)}`
+          : 'All recorded games';
 
   async function refresh() {
     setLoading(true);
@@ -589,360 +622,445 @@ export default function RankingsPage({ onBack }: { onBack: () => void }) {
         )}
         {data && (
           <>
-            <div className="rankings-stats" aria-label="Ledger statistics">
-              <div>
-                <Users size={20} />
-                <span>
-                  <strong>{data.players.length}</strong>Players in the ledger
-                </span>
-              </div>
-              <div>
-                <BookOpen size={20} />
-                <span>
-                  <strong>{data.games.length}</strong>Games recorded
-                </span>
-              </div>
-              <div>
-                <Crown size={20} />
-                <span>
-                  <strong>{totalPoints}</strong>Victory points earned
-                </span>
-              </div>
-            </div>
-            <div className="rankings-columns">
-              <section
-                className="rankings-paper rankings-leaderboard"
-                aria-labelledby="rankings-standings-title"
-              >
-                <div className="rankings-section-heading">
-                  <div>
-                    <p className="rankings-eyebrow">The standing of the houses</p>
-                    <h2 id="rankings-standings-title">Player rankings</h2>
-                  </div>
-                  <Trophy size={24} strokeWidth={1.3} />
-                </div>
-                {standings.length ? (
-                  <div className="rankings-table-wrap">
-                    <table className="rankings-table">
-                      <caption className="rankings-sr-only">
-                        Players ranked by total victory points across all recorded games. Tied
-                        totals share a rank.
-                      </caption>
-                      <thead>
-                        <tr>
-                          <th scope="col">Rank</th>
-                          <th scope="col">Player</th>
-                          <th scope="col">Games</th>
-                          <th scope="col">Average</th>
-                          <th scope="col">Best</th>
-                          <th scope="col">Total VP</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {standings.map((entry) => (
-                          <tr
-                            key={entry.player.id}
-                            className={entry.rank === 1 ? 'rankings-first' : ''}
-                          >
-                            <td>
-                              <span
-                                className={`rankings-place ${entry.rank === 1 ? 'rankings-place-first' : ''}`}
-                              >
-                                {entry.rank === 1 && <Crown size={13} />}
-                                {entry.rank ?? '—'}
-                              </span>
-                            </td>
-                            <th scope="row">
-                              <span className="rankings-player">
-                                <span className="rankings-player-crest" aria-hidden="true">
-                                  {initials(entry.player.name)}
-                                </span>
-                                <span>
-                                  {entry.player.name}
-                                  {entry.gamesPlayed === 0 && (
-                                    <small>Awaiting their first game</small>
-                                  )}
-                                </span>
-                              </span>
-                            </th>
-                            <td>{entry.gamesPlayed}</td>
-                            <td>{entry.gamesPlayed ? entry.averageVP.toFixed(1) : '—'}</td>
-                            <td>{entry.gamesPlayed ? entry.bestVP : '—'}</td>
-                            <td className="rankings-total">{entry.totalVP}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="rankings-empty">
-                    <Crown size={42} strokeWidth={1} />
-                    <h3>A new chronicle begins</h3>
-                    <p>
-                      {owner
-                        ? 'Record your first game and add its players to bring the rankings to life.'
-                        : 'The owner hasn’t recorded any players yet. Their first game will begin the rankings.'}
-                    </p>
-                    {owner && (
-                      <button
-                        className="rankings-button rankings-button-primary"
-                        onClick={() => openGame()}
-                      >
-                        <Plus size={16} />
-                        Record game
-                      </button>
-                    )}
-                  </div>
-                )}
-                <div className="rankings-table-note">
-                  <Flag size={14} />
-                  <span>Ranked by total victory points. Equal totals share a rank.</span>
-                </div>
-              </section>
-              <aside className="rankings-ledger-aside">
-                {owner && (
-                  <section className="rankings-owner-card">
-                    <span className="rankings-owner-icon">
-                      <Pencil size={22} />
-                    </span>
-                    <p className="rankings-eyebrow">You are the keeper</p>
-                    <h2>Write the next chapter.</h2>
-                    <p>
-                      Add a game, enter each player’s points, and the rankings take care of
-                      themselves.
-                    </p>
-                    <button
-                      className="rankings-button rankings-button-primary"
-                      onClick={() => openGame()}
-                    >
-                      <Plus size={17} />
-                      Record game
-                      <ArrowRight size={17} />
-                    </button>
-                    <button
-                      className="rankings-button rankings-button-outline"
-                      onClick={() => {
-                        setRoster(data.players.map((player) => ({ ...player })));
-                        setNewPlayerName('');
-                        setSaveError('');
-                        setNeedsReview(false);
-                        setConflict(null);
-                      }}
-                    >
-                      <Users size={16} />
-                      Manage players
-                    </button>
-                  </section>
-                )}
-                <section className="rankings-guide">
-                  <p className="rankings-eyebrow">A tally of triumphs</p>
-                  <h3>How points are counted</h3>
-                  <dl>
-                    <div>
-                      <dt>Settlement</dt>
-                      <dd>1 VP</dd>
-                    </div>
-                    <div>
-                      <dt>City</dt>
-                      <dd>2 VP</dd>
-                    </div>
-                    <div>
-                      <dt>Victory point card</dt>
-                      <dd>1 VP</dd>
-                    </div>
-                    <div>
-                      <dt>Longest Road</dt>
-                      <dd>2 VP</dd>
-                    </div>
-                    <div>
-                      <dt>Largest Army</dt>
-                      <dd>2 VP</dd>
-                    </div>
-                  </dl>
-                  <p>
-                    Each game stores the complete breakdown. Additional points can be entered for
-                    house rules or other awards.
-                  </p>
-                </section>
-              </aside>
-            </div>
-            <section className="rankings-chronicle" aria-labelledby="rankings-chronicle-title">
-              <div className="rankings-chronicle-heading">
+            <section className="rankings-date-filter" aria-labelledby="rankings-filter-title">
+              <div className="rankings-date-filter-heading">
+                <CalendarDays size={21} aria-hidden="true" />
                 <div>
-                  <p className="rankings-eyebrow">The island remembers</p>
-                  <h2 id="rankings-chronicle-title">Game chronicle</h2>
+                  <h2 id="rankings-filter-title">Date range</h2>
+                  <p id="rankings-filter-description" aria-live="polite">
+                    {filtered.error ? 'Choose a valid range to view the ledger.' : rangeDescription}
+                  </p>
                 </div>
-                <span>
-                  {games.length} {games.length === 1 ? 'record' : 'records'}
-                </span>
               </div>
-              {games.length === 0 ? (
-                <div className="rankings-paper rankings-chronicle-empty">
-                  <BookOpen size={28} strokeWidth={1.3} />
-                  <div>
-                    <h3>No games recorded yet</h3>
-                    <p>Dates, players, and every victory point will be preserved here.</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="rankings-games">
-                  {games.map((game) => {
-                    const sorted = [...game.results].sort(
-                      (a, b) => totalVP(b.breakdown) - totalVP(a.breakdown),
-                    );
-                    const high = totalVP(sorted[0].breakdown);
-                    const isExpanded = expanded.has(game.id);
-                    return (
-                      <article
-                        key={game.id}
-                        className={`rankings-paper rankings-game ${isExpanded ? 'is-expanded' : ''}`}
-                      >
-                        <div className="rankings-game-heading">
-                          <button
-                            className="rankings-game-toggle"
-                            aria-expanded={isExpanded}
-                            aria-controls={`game-${game.id}`}
-                            onClick={() => toggleExpanded(game.id)}
-                          >
-                            <span className="rankings-date-mark">
-                              <CalendarDays size={20} />
-                            </span>
-                            <span>
-                              <strong>{formatDate(game.date)}</strong>
-                              <small>
-                                {game.results.length} players <b>·</b>{' '}
-                                {game.results.reduce(
-                                  (sum, result) => sum + totalVP(result.breakdown),
-                                  0,
-                                )}{' '}
-                                total VP
-                              </small>
-                            </span>
-                            <ChevronDown size={19} className="rankings-chevron" />
-                          </button>
-                          {owner && (
-                            <div className="rankings-game-edit">
-                              <button
-                                className="rankings-icon"
-                                aria-label={`Edit game on ${formatDate(game.date)}`}
-                                title="Edit game"
-                                onClick={() => openGame(game)}
-                              >
-                                <Pencil size={16} />
-                              </button>
-                              <button
-                                className="rankings-icon rankings-delete"
-                                aria-label={`Delete game on ${formatDate(game.date)}`}
-                                title="Delete game"
-                                onClick={() => {
-                                  setDeleteGame(game);
-                                  setSaveError('');
-                                  setNeedsReview(false);
-                                  setConflict(null);
-                                }}
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                        <div className="rankings-result-strip">
-                          {sorted.map((result) => (
-                            <span
-                              className={
-                                totalVP(result.breakdown) === high ? 'rankings-result-high' : ''
-                              }
-                              key={result.playerId}
-                            >
-                              {totalVP(result.breakdown) === high && <Crown size={12} />}
-                              <span>
-                                {playersById.get(result.playerId)?.name ?? 'Unknown player'}
-                              </span>
-                              <b>
-                                {totalVP(result.breakdown)}
-                                <small> VP</small>
-                              </b>
-                            </span>
-                          ))}
-                        </div>
-                        {isExpanded && (
-                          <div className="rankings-game-details" id={`game-${game.id}`}>
-                            {game.notes && <p className="rankings-game-notes">{game.notes}</p>}
-                            <p className="rankings-scroll-hint">
-                              Swipe to see all points <ArrowRight size={13} aria-hidden="true" />
-                            </p>
-                            <div
-                              className="rankings-table-wrap"
-                              tabIndex={0}
-                              role="region"
-                              aria-label="Scrollable victory point breakdown"
-                            >
-                              <table className="rankings-breakdown-table">
-                                <caption>Victory point breakdown</caption>
-                                <thead>
-                                  <tr>
-                                    <th scope="col">Player</th>
-                                    <th scope="col">Settlements</th>
-                                    <th scope="col">Cities</th>
-                                    <th scope="col">VP cards</th>
-                                    <th scope="col">Longest Road</th>
-                                    <th scope="col">Largest Army</th>
-                                    <th scope="col">Other</th>
-                                    <th scope="col">Total</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {sorted.map(({ playerId, breakdown }) => (
-                                    <tr key={playerId}>
-                                      <th scope="row">
-                                        {playersById.get(playerId)?.name ?? 'Unknown player'}
-                                      </th>
-                                      <td>
-                                        {breakdown.settlements}
-                                        <small>{breakdown.settlements} VP</small>
-                                      </td>
-                                      <td>
-                                        {breakdown.cities}
-                                        <small>{breakdown.cities * 2} VP</small>
-                                      </td>
-                                      <td>
-                                        {breakdown.victoryCards}
-                                        <small>{breakdown.victoryCards} VP</small>
-                                      </td>
-                                      <td>{breakdown.longestRoad ? '2 VP' : '—'}</td>
-                                      <td>{breakdown.largestArmy ? '2 VP' : '—'}</td>
-                                      <td>{breakdown.other} VP</td>
-                                      <td className="rankings-total">
-                                        {totalVP(breakdown)}
-                                        <small>VP</small>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        )}
-                        {!isExpanded && (
-                          <button
-                            className="rankings-view-breakdown"
-                            onClick={() => toggleExpanded(game.id)}
-                          >
-                            View victory point breakdown
-                            <ChevronDown size={13} />
-                          </button>
-                        )}
-                      </article>
-                    );
-                  })}
-                </div>
+              <div className="rankings-date-controls">
+                <label htmlFor="rankings-from-date">
+                  From date
+                  <input
+                    id="rankings-from-date"
+                    type="date"
+                    value={fromDate}
+                    aria-invalid={Boolean(filtered.error)}
+                    aria-describedby={
+                      filtered.error ? 'rankings-date-error' : 'rankings-filter-description'
+                    }
+                    onChange={(event) => setFromDate(event.target.value)}
+                  />
+                </label>
+                <label htmlFor="rankings-to-date">
+                  To date
+                  <input
+                    id="rankings-to-date"
+                    type="date"
+                    value={toDate}
+                    aria-invalid={Boolean(filtered.error)}
+                    aria-describedby={
+                      filtered.error ? 'rankings-date-error' : 'rankings-filter-description'
+                    }
+                    onChange={(event) => setToDate(event.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="rankings-button rankings-button-outline"
+                  disabled={!rangeActive}
+                  onClick={() => {
+                    setFromDate('');
+                    setToDate('');
+                  }}
+                >
+                  <X size={14} aria-hidden="true" />
+                  All dates
+                </button>
+              </div>
+              {filtered.error && (
+                <p id="rankings-date-error" className="rankings-date-error" role="alert">
+                  {filtered.error}
+                </p>
               )}
             </section>
-            <footer className="rankings-footer">
-              <span>✦</span>
-              <p>Earned on the island. Remembered in the ledger.</p>
-              <span>✦</span>
-            </footer>
+            {filtered.data && (
+              <>
+                <div className="rankings-stats" aria-label="Ledger statistics">
+                  <div>
+                    <Users size={20} />
+                    <span>
+                      <strong>{standings.length}</strong>
+                      {rangeActive ? 'Players in this range' : 'Players in the ledger'}
+                    </span>
+                  </div>
+                  <div>
+                    <BookOpen size={20} />
+                    <span>
+                      <strong>{games.length}</strong>
+                      {rangeActive ? 'Games in this range' : 'Games recorded'}
+                    </span>
+                  </div>
+                  <div>
+                    <Crown size={20} />
+                    <span>
+                      <strong>{totalPoints}</strong>Victory points earned
+                    </span>
+                  </div>
+                </div>
+                <div className="rankings-columns">
+                  <section
+                    className="rankings-paper rankings-leaderboard"
+                    aria-labelledby="rankings-standings-title"
+                  >
+                    <div className="rankings-section-heading">
+                      <div>
+                        <p className="rankings-eyebrow">The standing of the houses</p>
+                        <h2 id="rankings-standings-title">Player rankings</h2>
+                      </div>
+                      <Trophy size={24} strokeWidth={1.3} />
+                    </div>
+                    {standings.length ? (
+                      <div className="rankings-table-wrap">
+                        <table className="rankings-table">
+                          <caption className="rankings-sr-only">
+                            Players ranked by total victory points across{' '}
+                            {rangeActive
+                              ? 'games in the selected date range'
+                              : 'all recorded games'}
+                            . Tied totals share a rank.
+                          </caption>
+                          <thead>
+                            <tr>
+                              <th scope="col">Rank</th>
+                              <th scope="col">Player</th>
+                              <th scope="col">Games</th>
+                              <th scope="col">Average</th>
+                              <th scope="col">Total VP</th>
+                              <th scope="col">Wins</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {standings.map((entry) => (
+                              <tr
+                                key={entry.player.id}
+                                className={entry.rank === 1 ? 'rankings-first' : ''}
+                              >
+                                <td>
+                                  <span
+                                    className={`rankings-place ${entry.rank === 1 ? 'rankings-place-first' : ''}`}
+                                  >
+                                    {entry.rank === 1 && <Crown size={13} />}
+                                    {entry.rank ?? '—'}
+                                  </span>
+                                </td>
+                                <th scope="row">
+                                  <span className="rankings-player">
+                                    <span className="rankings-player-crest" aria-hidden="true">
+                                      {initials(entry.player.name)}
+                                    </span>
+                                    <span>
+                                      {entry.player.name}
+                                      {entry.gamesPlayed === 0 && (
+                                        <small>Awaiting their first game</small>
+                                      )}
+                                    </span>
+                                  </span>
+                                </th>
+                                <td>{entry.gamesPlayed}</td>
+                                <td>{entry.gamesPlayed ? entry.averageVP.toFixed(1) : '—'}</td>
+                                <td className="rankings-total">{entry.totalVP}</td>
+                                <td className="rankings-wins">{entry.wins}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="rankings-empty">
+                        <Crown size={42} strokeWidth={1} />
+                        <h3>
+                          {rangeActive ? 'No games in this date range' : 'A new chronicle begins'}
+                        </h3>
+                        <p>
+                          {rangeActive
+                            ? 'Choose another range, or select All dates to return to the complete ledger.'
+                            : owner
+                              ? 'Record your first game and add its players to bring the rankings to life.'
+                              : 'The owner hasn’t recorded any players yet. Their first game will begin the rankings.'}
+                        </p>
+                        {owner && !rangeActive && (
+                          <button
+                            className="rankings-button rankings-button-primary"
+                            onClick={() => openGame()}
+                          >
+                            <Plus size={16} />
+                            Record game
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    <div className="rankings-table-note">
+                      <Flag size={14} />
+                      <span>
+                        Ranked by total victory points. Equal totals share a rank. Wins count the
+                        highest positive VP in a game; tied leaders share a win.
+                      </span>
+                    </div>
+                  </section>
+                  <aside className="rankings-ledger-aside">
+                    {owner && (
+                      <section className="rankings-owner-card">
+                        <span className="rankings-owner-icon">
+                          <Pencil size={22} />
+                        </span>
+                        <p className="rankings-eyebrow">You are the keeper</p>
+                        <h2>Write the next chapter.</h2>
+                        <p>
+                          Add a game, enter each player’s points, and the rankings take care of
+                          themselves.
+                        </p>
+                        <button
+                          className="rankings-button rankings-button-primary"
+                          onClick={() => openGame()}
+                        >
+                          <Plus size={17} />
+                          Record game
+                          <ArrowRight size={17} />
+                        </button>
+                        <button
+                          className="rankings-button rankings-button-outline"
+                          onClick={() => {
+                            setRoster(data.players.map((player) => ({ ...player })));
+                            setNewPlayerName('');
+                            setSaveError('');
+                            setNeedsReview(false);
+                            setConflict(null);
+                          }}
+                        >
+                          <Users size={16} />
+                          Manage players
+                        </button>
+                      </section>
+                    )}
+                    <section className="rankings-guide">
+                      <p className="rankings-eyebrow">A tally of triumphs</p>
+                      <h3>How points are counted</h3>
+                      <dl>
+                        <div>
+                          <dt>Settlement</dt>
+                          <dd>1 VP</dd>
+                        </div>
+                        <div>
+                          <dt>City</dt>
+                          <dd>2 VP</dd>
+                        </div>
+                        <div>
+                          <dt>Victory point card</dt>
+                          <dd>1 VP</dd>
+                        </div>
+                        <div>
+                          <dt>Longest Road</dt>
+                          <dd>2 VP</dd>
+                        </div>
+                        <div>
+                          <dt>Largest Army</dt>
+                          <dd>2 VP</dd>
+                        </div>
+                      </dl>
+                      <p>
+                        Each game stores the complete breakdown. Additional points can be entered
+                        for house rules or other awards.
+                      </p>
+                    </section>
+                  </aside>
+                </div>
+                <section className="rankings-chronicle" aria-labelledby="rankings-chronicle-title">
+                  <div className="rankings-chronicle-heading">
+                    <div>
+                      <p className="rankings-eyebrow">The island remembers</p>
+                      <h2 id="rankings-chronicle-title">Game chronicle</h2>
+                    </div>
+                    <span>
+                      {games.length} {games.length === 1 ? 'record' : 'records'}
+                    </span>
+                  </div>
+                  {games.length === 0 ? (
+                    <div className="rankings-paper rankings-chronicle-empty">
+                      <BookOpen size={28} strokeWidth={1.3} />
+                      <div>
+                        <h3>
+                          {rangeActive
+                            ? 'The chronicle is empty for these dates'
+                            : 'No games recorded yet'}
+                        </h3>
+                        <p>
+                          {rangeActive
+                            ? 'Change the date range above to see other recorded games.'
+                            : 'Dates, players, and every victory point will be preserved here.'}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rankings-games">
+                      {games.map((game) => {
+                        const sorted = [...game.results].sort(
+                          (a, b) => totalVP(b.breakdown) - totalVP(a.breakdown),
+                        );
+                        const high = totalVP(sorted[0].breakdown);
+                        const isExpanded = expanded.has(game.id);
+                        return (
+                          <article
+                            key={game.id}
+                            className={`rankings-paper rankings-game ${isExpanded ? 'is-expanded' : ''}`}
+                          >
+                            <div className="rankings-game-heading">
+                              <button
+                                className="rankings-game-toggle"
+                                aria-expanded={isExpanded}
+                                aria-controls={`game-${game.id}`}
+                                onClick={() => toggleExpanded(game.id)}
+                              >
+                                <span className="rankings-date-mark">
+                                  <CalendarDays size={20} />
+                                </span>
+                                <span>
+                                  <strong>{formatDate(game.date)}</strong>
+                                  <small>
+                                    {game.results.length} players <b>·</b>{' '}
+                                    {game.results.reduce(
+                                      (sum, result) => sum + totalVP(result.breakdown),
+                                      0,
+                                    )}{' '}
+                                    total VP
+                                  </small>
+                                </span>
+                                <ChevronDown size={19} className="rankings-chevron" />
+                              </button>
+                              {owner && (
+                                <div className="rankings-game-edit">
+                                  <button
+                                    className="rankings-icon"
+                                    aria-label={`Edit game on ${formatDate(game.date)}`}
+                                    title="Edit game"
+                                    onClick={() => openGame(game)}
+                                  >
+                                    <Pencil size={16} />
+                                  </button>
+                                  <button
+                                    className="rankings-icon rankings-delete"
+                                    aria-label={`Delete game on ${formatDate(game.date)}`}
+                                    title="Delete game"
+                                    onClick={() => {
+                                      setDeleteGame(game);
+                                      setSaveError('');
+                                      setNeedsReview(false);
+                                      setConflict(null);
+                                    }}
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                            <div className="rankings-result-strip">
+                              {sorted.map((result) => (
+                                <span
+                                  className={
+                                    high > 0 && totalVP(result.breakdown) === high
+                                      ? 'rankings-result-high'
+                                      : ''
+                                  }
+                                  key={result.playerId}
+                                >
+                                  {high > 0 && totalVP(result.breakdown) === high && (
+                                    <Crown size={12} />
+                                  )}
+                                  <span>
+                                    {playersById.get(result.playerId)?.name ?? 'Unknown player'}
+                                  </span>
+                                  <b>
+                                    {totalVP(result.breakdown)}
+                                    <small> VP</small>
+                                  </b>
+                                </span>
+                              ))}
+                            </div>
+                            {isExpanded && (
+                              <div className="rankings-game-details" id={`game-${game.id}`}>
+                                {game.notes && <p className="rankings-game-notes">{game.notes}</p>}
+                                <p className="rankings-scroll-hint">
+                                  Swipe to see all points{' '}
+                                  <ArrowRight size={13} aria-hidden="true" />
+                                </p>
+                                <div
+                                  className="rankings-table-wrap"
+                                  tabIndex={0}
+                                  role="region"
+                                  aria-label="Scrollable victory point breakdown"
+                                >
+                                  <table className="rankings-breakdown-table">
+                                    <caption>Victory point breakdown</caption>
+                                    <thead>
+                                      <tr>
+                                        <th scope="col">Player</th>
+                                        <th scope="col">Settlements</th>
+                                        <th scope="col">Cities</th>
+                                        <th scope="col">VP cards</th>
+                                        <th scope="col">Longest Road</th>
+                                        <th scope="col">Largest Army</th>
+                                        <th scope="col">Other</th>
+                                        <th scope="col">Total</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {sorted.map(({ playerId, breakdown }) => (
+                                        <tr key={playerId}>
+                                          <th scope="row">
+                                            {playersById.get(playerId)?.name ?? 'Unknown player'}
+                                          </th>
+                                          <td>
+                                            {breakdown.settlements}
+                                            <small>{breakdown.settlements} VP</small>
+                                          </td>
+                                          <td>
+                                            {breakdown.cities}
+                                            <small>{breakdown.cities * 2} VP</small>
+                                          </td>
+                                          <td>
+                                            {breakdown.victoryCards}
+                                            <small>{breakdown.victoryCards} VP</small>
+                                          </td>
+                                          <td>{breakdown.longestRoad ? '2 VP' : '—'}</td>
+                                          <td>{breakdown.largestArmy ? '2 VP' : '—'}</td>
+                                          <td>{breakdown.other} VP</td>
+                                          <td className="rankings-total">
+                                            {totalVP(breakdown)}
+                                            <small>VP</small>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+                            {!isExpanded && (
+                              <button
+                                className="rankings-view-breakdown"
+                                onClick={() => toggleExpanded(game.id)}
+                              >
+                                View victory point breakdown
+                                <ChevronDown size={13} />
+                              </button>
+                            )}
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+                <footer className="rankings-footer">
+                  <span>✦</span>
+                  <p>Earned on the island. Remembered in the ledger.</p>
+                  <span>✦</span>
+                </footer>
+              </>
+            )}
           </>
         )}
       </main>
