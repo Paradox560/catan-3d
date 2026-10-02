@@ -1,10 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MemoryOwnerAuthStore,
   matchesOwner,
   ownerCredentials,
+  ownerConfigurationIssue,
   OWNER_LOGIN_WINDOW,
 } from './owner-auth';
+
+const storage = vi.hoisted(() => ({
+  create: vi.fn(async () => ({ store: {}, ownerAuth: {} })),
+}));
+vi.mock('./rankings-storage.js', () => ({ createRankingsServices: storage.create }));
+import { rankingsRouter } from './rankings';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 const environment = {
   RANKINGS_ADMIN_USERNAME: 'test-keeper',
@@ -59,6 +71,84 @@ describe('environment owner identity', () => {
       ],
     ])
       expect(await matchesOwner(username, password, credentials)).toBe(false);
+  });
+});
+
+describe('safe owner configuration diagnostics', () => {
+  it.each([
+    [{ ...environment, RANKINGS_ADMIN_USERNAME: undefined }, 'username-missing'],
+    [{ ...environment, RANKINGS_ADMIN_USERNAME: '' }, 'username-missing'],
+    [
+      { ...environment, RANKINGS_ADMIN_USERNAME: ' private-owner' },
+      'username-surrounding-whitespace',
+    ],
+    [
+      { ...environment, RANKINGS_ADMIN_USERNAME: 'private-owner\n' },
+      'username-surrounding-whitespace',
+    ],
+    [{ ...environment, RANKINGS_ADMIN_USERNAME: 'u'.repeat(129) }, 'username-too-long'],
+    [
+      { ...environment, RANKINGS_ADMIN_USERNAME: 'private\u0000owner' },
+      'username-invalid-characters',
+    ],
+    [
+      { ...environment, RANKINGS_ADMIN_USERNAME: 'private\u007fowner' },
+      'username-invalid-characters',
+    ],
+    [{ ...environment, RANKINGS_ADMIN_PASSWORD: undefined }, 'password-missing'],
+    [{ ...environment, RANKINGS_ADMIN_PASSWORD: '' }, 'password-missing'],
+    [{ ...environment, RANKINGS_ADMIN_PASSWORD: 'p'.repeat(9) }, 'password-too-short'],
+    [{ ...environment, RANKINGS_ADMIN_PASSWORD: 'p'.repeat(1025) }, 'password-too-long'],
+    [{ ...environment, RANKINGS_ADMIN_PASSWORD: 'é'.repeat(513) }, 'password-too-long'],
+  ] as const)(
+    'returns only a fixed reason and disables invalid credentials (%#)',
+    (env, reason) => {
+      expect(ownerConfigurationIssue(env)).toBe(reason);
+      expect(ownerCredentials(env)).toBeNull();
+    },
+  );
+  it.each([
+    { ...environment, RANKINGS_ADMIN_USERNAME: 'u'.repeat(128) },
+    { ...environment, RANKINGS_ADMIN_PASSWORD: 'p'.repeat(10) },
+    { ...environment, RANKINGS_ADMIN_PASSWORD: 'p'.repeat(1024) },
+    { ...environment, RANKINGS_ADMIN_PASSWORD: 'é'.repeat(512) },
+    { ...environment, RANKINGS_ADMIN_PASSWORD: ' preserved-password-whitespace ' },
+  ])('preserves valid boundaries and existing password whitespace behavior (%#)', (env) => {
+    expect(ownerConfigurationIssue(env)).toBeNull();
+    expect(ownerCredentials(env)).not.toBeNull();
+  });
+  it('reports the first validation failure without inspecting or returning secret content', () => {
+    expect(ownerConfigurationIssue({ RANKINGS_ADMIN_PASSWORD: 'private-value' })).toBe(
+      'username-missing',
+    );
+    expect(
+      ownerConfigurationIssue({
+        RANKINGS_ADMIN_USERNAME: 'bad owner\n',
+        RANKINGS_ADMIN_PASSWORD: 'short',
+      }),
+    ).toBe('username-surrounding-whitespace');
+  });
+  it('logs only one fixed diagnostic at router initialization without values, lengths, or hashes', async () => {
+    vi.stubEnv('RANKINGS_ADMIN_USERNAME', 'sensitive-owner-name');
+    vi.stubEnv('RANKINGS_ADMIN_PASSWORD', 's3cr3t!');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const router = rankingsRouter('/unused-owner-diagnostic-test');
+    expect(router).toBeDefined();
+    await Promise.resolve();
+    expect(logged.mock.calls).toEqual([['Rankings owner access disabled:', 'password-too-short']]);
+    expect(JSON.stringify(logged.mock.calls)).not.toContain('sensitive-owner-name');
+    expect(JSON.stringify(logged.mock.calls)).not.toContain('s3cr3t!');
+    ownerConfigurationIssue();
+    ownerCredentials();
+    expect(logged).toHaveBeenCalledTimes(1);
+  });
+  it('does not log credentials or any diagnostic for a configured owner', async () => {
+    vi.stubEnv('RANKINGS_ADMIN_USERNAME', environment.RANKINGS_ADMIN_USERNAME);
+    vi.stubEnv('RANKINGS_ADMIN_PASSWORD', environment.RANKINGS_ADMIN_PASSWORD);
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    rankingsRouter('/unused-owner-diagnostic-test');
+    await Promise.resolve();
+    expect(logged).not.toHaveBeenCalled();
   });
 });
 

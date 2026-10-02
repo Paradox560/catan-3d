@@ -28,20 +28,36 @@ export interface OwnerAuthStore {
   clearLogins(key: string): Promise<void>;
 }
 
-/** Environment credentials are the only owner identity; missing/invalid values disable editing. */
-export function ownerCredentials(env: NodeJS.ProcessEnv = process.env): OwnerCredentials | null {
+export type OwnerConfigurationIssue =
+  | 'username-missing'
+  | 'username-surrounding-whitespace'
+  | 'username-too-long'
+  | 'username-invalid-characters'
+  | 'password-missing'
+  | 'password-too-short'
+  | 'password-too-long';
+
+/** A fixed diagnostic code only: never include credential values, lengths, or hashes. */
+export function ownerConfigurationIssue(
+  env: NodeJS.ProcessEnv = process.env,
+): OwnerConfigurationIssue | null {
   const username = env.RANKINGS_ADMIN_USERNAME;
   const password = env.RANKINGS_ADMIN_PASSWORD;
-  if (
-    !username ||
-    username !== username.trim() ||
-    username.length > 128 ||
-    /[\u0000-\u001f\u007f]/.test(username) ||
-    !password ||
-    password.length < 10 ||
-    Buffer.byteLength(password, 'utf8') > 1_024
-  )
-    return null;
+  if (!username) return 'username-missing';
+  if (username !== username.trim()) return 'username-surrounding-whitespace';
+  if (username.length > 128) return 'username-too-long';
+  if (/[\u0000-\u001f\u007f]/.test(username)) return 'username-invalid-characters';
+  if (!password) return 'password-missing';
+  if (password.length < 10) return 'password-too-short';
+  if (Buffer.byteLength(password, 'utf8') > 1_024) return 'password-too-long';
+  return null;
+}
+
+/** Environment credentials are the only owner identity; missing/invalid values disable editing. */
+export function ownerCredentials(env: NodeJS.ProcessEnv = process.env): OwnerCredentials | null {
+  if (ownerConfigurationIssue(env) !== null) return null;
+  const username = env.RANKINGS_ADMIN_USERNAME!;
+  const password = env.RANKINGS_ADMIN_PASSWORD!;
   const usernameHash = createHash('sha256').update(username).digest();
   // A stable, username-specific salt makes credentials portable across serverless instances.
   // The fingerprint is derived from the slow password hash, never from plaintext credentials.

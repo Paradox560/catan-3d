@@ -11,6 +11,7 @@ import {
   hashOwnerToken,
   matchesOwner,
   ownerCredentials,
+  ownerConfigurationIssue,
   OWNER_SESSION_LIFETIME,
   type OwnerAuthStore,
 } from './owner-auth.js';
@@ -25,6 +26,7 @@ export function rankingsRouter(dataDir: string): express.Router {
   const router = express.Router();
   const production = process.env.NODE_ENV === 'production';
   const credentials = ownerCredentials();
+  if (!credentials) console.error('Rankings owner access disabled:', ownerConfigurationIssue());
   const distributed =
     (process.env.RANKINGS_STORAGE ?? (process.env.VERCEL === '1' ? 'firestore' : 'file')) ===
     'firestore';
