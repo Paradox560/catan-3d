@@ -1,78 +1,32 @@
-import { validateRankings, type RankingsData } from './model';
+import type { RankingsData } from './model';
+import type { RankingsAccess } from './types';
+export { RankingsError } from './types';
+export type { RankingsAccess, RankingsReply } from './types';
 
-export interface RankingsAccess {
-  authenticated: boolean;
-  configured: boolean;
-  canSetup: boolean;
-}
-export interface RankingsReply {
-  data: RankingsData;
-  access: RankingsAccess;
-}
+// Browser Firebase is the default. The HTTP mode is for existing local Node installs.
+export const usesFirebaseRankings = import.meta.env.VITE_RANKINGS_TRANSPORT !== 'http';
+const client = () => (usesFirebaseRankings ? import('./firebase-client') : import('./http-client'));
 
-export class RankingsError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number,
-  ) {
-    super(message);
-    this.name = 'RankingsError';
-  }
-}
+export const loadRankings = async () => (await client()).loadRankings();
+export const saveRankings = async (data: RankingsData) => (await client()).saveRankings(data);
+export const loginRankings = async (identity: string, password: string) =>
+  (await client()).loginRankings(identity, password);
+export const logoutRankings = async () => (await client()).logoutRankings();
 
-async function request(path = '', method = 'GET', body?: unknown): Promise<RankingsReply> {
-  let response: Response;
-  try {
-    response = await fetch(`/api/rankings${path}`, {
-      method,
-      credentials: 'same-origin',
-      cache: 'no-store',
-      headers: {
-        Accept: 'application/json',
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch {
-    throw new RankingsError('Could not reach the rankings server. Please try again.', 0);
+export function watchRankingsAccess(listener: (access: RankingsAccess) => void): () => void {
+  let disposed = false;
+  let unsubscribe: (() => void) | undefined;
+  if (usesFirebaseRankings) {
+    void import('./firebase-client')
+      .then((firebase) => {
+        if (!disposed) unsubscribe = firebase.watchRankingsAccess(listener);
+      })
+      .catch(() => {
+        /* loadRankings reports configuration and network errors. */
+      });
   }
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    throw new RankingsError(
-      'The rankings service is unavailable. Please try again.',
-      response.status,
-    );
-  }
-  const result = payload as Partial<RankingsReply> & { error?: unknown };
-  if (!response.ok) {
-    throw new RankingsError(
-      typeof result?.error === 'string' ? result.error : 'The request could not be completed.',
-      response.status,
-    );
-  }
-  if (
-    !result?.access ||
-    typeof result.access.authenticated !== 'boolean' ||
-    typeof result.access.configured !== 'boolean' ||
-    typeof result.access.canSetup !== 'boolean'
-  ) {
-    throw new RankingsError('The rankings response could not be read. Please try again.', 502);
-  }
-  try {
-    return { data: validateRankings(result.data), access: result.access };
-  } catch {
-    throw new RankingsError(
-      'The saved rankings could not be read. Your records have not been changed.',
-      502,
-    );
-  }
+  return () => {
+    disposed = true;
+    unsubscribe?.();
+  };
 }
-
-export const loadRankings = () => request();
-export const saveRankings = (data: RankingsData) => request('', 'PUT', data);
-export const loginRankings = (username: string, password: string) =>
-  request('/login', 'POST', { username, password });
-export const logoutRankings = () => request('/logout', 'POST', {});
