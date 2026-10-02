@@ -17,3 +17,6 @@ secrets
 **/*service-account*.json
 **/*serviceAccount*.json
 **/*firebase-adminsdk*.json
+
+# Generated local emulator rules are not deployment input.
+tests/firestore.browser.rules

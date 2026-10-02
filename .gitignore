@@ -18,3 +18,6 @@ secrets/
 **/*service-account*.json
 **/*serviceAccount*.json
 **/*firebase-adminsdk*.json
+
+# Generated from the reviewed rules template for isolated browser emulator tests.
+tests/firestore.browser.rules

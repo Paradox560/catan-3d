@@ -17,3 +17,6 @@ coverage
 *.log
 *.tsbuildinfo
 .DS_Store
+
+# Generated local emulator rules are not deployment input.
+tests/firestore.browser.rules
